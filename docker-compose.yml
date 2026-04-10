@@ -1,0 +1,83 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: discord_scraper
+      POSTGRES_USER: discord
+      POSTGRES_PASSWORD: discord
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U discord -d discord_scraper"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrantdata:/qdrant/storage
+
+  aspire-dashboard:
+    image: mcr.microsoft.com/dotnet/aspire-dashboard:9.2
+    ports:
+      - "18888:18888"
+      - "18889:18889"
+    environment:
+      DOTNET_DASHBOARD_UNSECURED_ALLOW_ANONYMOUS: "true"
+
+  ingester:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: ingester
+    environment:
+      Discord__BotToken: ${DISCORD_BOT_TOKEN:-}
+      Discord__Guilds__0: ${DISCORD_GUILD_ID:-}
+      Discord__BackfillSinceUtc: ${DISCORD_BACKFILL_SINCE_UTC:-}
+      Postgres__ConnectionString: "Host=postgres;Port=5432;Database=discord_scraper;Username=discord;Password=discord"
+      Qdrant__BaseUrl: "http://qdrant:6333"
+      Qdrant__CollectionName: "discord-messages"
+      Ollama__Embedding__BaseUrl: "http://host.docker.internal:11434"
+      Ollama__Embedding__Model: "nomic-embed-text"
+      Ollama__Tagging__BaseUrl: "http://host.docker.internal:11434"
+      Ollama__Tagging__Model: "llama3.1:8b"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://aspire-dashboard:18889
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      aspire-dashboard:
+        condition: service_started
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+    ports:
+      - "5000:5000"
+    environment:
+      Postgres__ConnectionString: "Host=postgres;Port=5432;Database=discord_scraper;Username=discord;Password=discord"
+      Qdrant__BaseUrl: "http://qdrant:6333"
+      Qdrant__CollectionName: "discord-messages"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://aspire-dashboard:18889
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      aspire-dashboard:
+        condition: service_started
+
+volumes:
+  pgdata:
+  qdrantdata:
