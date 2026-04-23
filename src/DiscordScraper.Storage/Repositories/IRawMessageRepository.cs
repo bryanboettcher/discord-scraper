@@ -3,9 +3,8 @@ using DiscordScraper.Storage.Entities;
 namespace DiscordScraper.Storage.Repositories;
 
 /// <summary>
-/// Write-side access to the raw Tier 1 capture tables. The sync worker is the
-/// only caller; the projection and enrichment workers read from it only
-/// indirectly, via the Tier 2 <c>messages</c> table.
+/// Access to Tier 1 <c>raw_messages</c>. Writes come from the sync worker;
+/// reads are issued by the projection worker, which streams un-projected rows.
 /// </summary>
 public interface IRawMessageRepository
 {
@@ -23,4 +22,12 @@ public interface IRawMessageRepository
     /// <see cref="RawSyncStateEntity.LastMessageId"/> is missing.
     /// </summary>
     Task<long?> GetMaxMessageIdAsync(long channelId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Streams raw messages that have not yet been projected (i.e. no
+    /// corresponding row in <c>messages</c>). Ordered by <c>message_id</c> so
+    /// a crash mid-pass resumes naturally on the next run. Consumer controls
+    /// batching via <paramref name="batchSize"/>.
+    /// </summary>
+    IAsyncEnumerable<RawMessageEntity> EnumerateUnprojectedAsync(int batchSize, CancellationToken ct = default);
 }

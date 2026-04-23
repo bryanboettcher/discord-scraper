@@ -20,7 +20,17 @@ public static class ServiceDefaultsExtensions
         builder.Services.AddServiceDiscovery();
         builder.Services.ConfigureHttpClientDefaults(http =>
         {
-            http.AddStandardResilienceHandler();
+            // The default attempt timeout (10s) and total timeout (30s) are
+            // tuned for fast REST APIs. This project also talks to Ollama,
+            // where a single tagging or embedding call can legitimately run
+            // tens of seconds on CPU or a warming GPU. Generous bumps keep
+            // legitimate work from being cancelled as a false positive.
+            http.AddStandardResilienceHandler(options =>
+            {
+                options.AttemptTimeout.Timeout = TimeSpan.FromMinutes(3);
+                options.TotalRequestTimeout.Timeout = TimeSpan.FromMinutes(5);
+                options.CircuitBreaker.SamplingDuration = TimeSpan.FromMinutes(10);
+            });
             http.AddServiceDiscovery();
         });
 

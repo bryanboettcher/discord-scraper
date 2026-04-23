@@ -33,6 +33,8 @@ public static class ServiceCollectionExtensions
         services.AddTransient<IRawChannelRepository, RawChannelRepository>();
         services.AddTransient<ISyncStateRepository, SyncStateRepository>();
         services.AddTransient<IIngestionRunRepository, IngestionRunRepository>();
+        services.AddTransient<IMessageRepository, MessageRepository>();
+        services.AddTransient<IMessageEnrichmentRepository, MessageEnrichmentRepository>();
 
         return services;
     }

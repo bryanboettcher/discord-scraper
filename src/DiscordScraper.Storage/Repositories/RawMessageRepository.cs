@@ -66,4 +66,36 @@ internal sealed class RawMessageRepository(IDbContextFactory<DiscordScraperDbCon
             .Select(r => (long?)r.MessageId)
             .FirstOrDefaultAsync(ct);
     }
+
+    public async IAsyncEnumerable<RawMessageEntity> EnumerateUnprojectedAsync(
+        int batchSize,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        if (batchSize <= 0) yield break;
+
+        await using var context = await contextFactory.CreateDbContextAsync(ct);
+
+        // Keyset pagination on message_id keeps the query bounded regardless
+        // of how far behind projection runs. EF translates the Any() predicate
+        // into a NOT EXISTS anti-join against messages.
+        var cursor = 0L;
+        while (!ct.IsCancellationRequested)
+        {
+            var page = await context.RawMessages
+                .AsNoTracking()
+                .Where(r => r.MessageId > cursor
+                         && !context.Messages.Any(m => m.MessageId == r.MessageId))
+                .OrderBy(r => r.MessageId)
+                .Take(batchSize)
+                .ToListAsync(ct);
+
+            if (page.Count == 0) yield break;
+
+            foreach (var row in page)
+                yield return row;
+
+            cursor = page[^1].MessageId;
+            if (page.Count < batchSize) yield break;
+        }
+    }
 }
