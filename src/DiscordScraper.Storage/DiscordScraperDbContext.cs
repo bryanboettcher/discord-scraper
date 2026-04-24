@@ -15,8 +15,11 @@ public sealed class DiscordScraperDbContext(DbContextOptions<DiscordScraperDbCon
     public DbSet<MessageEntity> Messages => Set<MessageEntity>();
     public DbSet<MessageEnrichmentEntity> MessageEnrichments => Set<MessageEnrichmentEntity>();
 
+    public DbSet<RawPinEntity> RawPins => Set<RawPinEntity>();
+
     public DbSet<GuildCurrentView> GuildsCurrent => Set<GuildCurrentView>();
     public DbSet<ChannelCurrentView> ChannelsCurrent => Set<ChannelCurrentView>();
+    public DbSet<PinCurrentView> PinsCurrent => Set<PinCurrentView>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -70,6 +73,15 @@ public sealed class DiscordScraperDbContext(DbContextOptions<DiscordScraperDbCon
             entity.HasKey(e => new { e.ChannelId, e.FetchedAt });
             entity.Property(e => e.ChannelId).HasColumnName("channel_id");
             entity.Property(e => e.GuildId).HasColumnName("guild_id");
+            entity.Property(e => e.FetchedAt).HasColumnName("fetched_at");
+            entity.Property(e => e.Payload).HasColumnName("payload").HasColumnType("jsonb");
+        });
+
+        modelBuilder.Entity<RawPinEntity>(entity =>
+        {
+            entity.ToTable("raw_pins");
+            entity.HasKey(e => new { e.ChannelId, e.FetchedAt });
+            entity.Property(e => e.ChannelId).HasColumnName("channel_id");
             entity.Property(e => e.FetchedAt).HasColumnName("fetched_at");
             entity.Property(e => e.Payload).HasColumnName("payload").HasColumnType("jsonb");
         });
@@ -200,6 +212,15 @@ public sealed class DiscordScraperDbContext(DbContextOptions<DiscordScraperDbCon
             entity.HasNoKey();
             entity.Property(e => e.ChannelId).HasColumnName("channel_id");
             entity.Property(e => e.GuildId).HasColumnName("guild_id");
+            entity.Property(e => e.FetchedAt).HasColumnName("fetched_at");
+            entity.Property(e => e.Payload).HasColumnName("payload");
+        });
+
+        modelBuilder.Entity<PinCurrentView>(entity =>
+        {
+            entity.ToView("pins_current");
+            entity.HasNoKey();
+            entity.Property(e => e.ChannelId).HasColumnName("channel_id");
             entity.Property(e => e.FetchedAt).HasColumnName("fetched_at");
             entity.Property(e => e.Payload).HasColumnName("payload");
         });

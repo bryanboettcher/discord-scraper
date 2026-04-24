@@ -3,6 +3,7 @@ using System;
 using DiscordScraper.Storage;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using NpgsqlTypes;
@@ -12,9 +13,11 @@ using NpgsqlTypes;
 namespace DiscordScraper.Storage.Migrations
 {
     [DbContext(typeof(DiscordScraperDbContext))]
-    partial class DiscordScraperDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260423213803_AddRawPins")]
+    partial class AddRawPins
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

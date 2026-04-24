@@ -21,6 +21,8 @@ public sealed class DiscordSyncWorker(
     IRawGuildRepository guildRepo,
     IRawChannelRepository channelRepo,
     IRawMessageRepository messageRepo,
+    IRawPinRepository pinRepo,
+    IRawMessageEditRepository editRepo,
     ISyncStateRepository syncStateRepo,
     IIngestionRunRepository runRepo,
     IOptions<DiscordOptions> options,
@@ -160,6 +162,7 @@ public sealed class DiscordSyncWorker(
         foreach (var source in sources)
         {
             totalInserted += await SyncChannelMessagesAsync(source, guild.GuildId, ct);
+            await SyncChannelPinsAsync(source, guild.GuildId, ct);
         }
         return totalInserted;
     }
@@ -287,5 +290,113 @@ public sealed class DiscordSyncWorker(
 
         batch.Clear();
         return inserted;
+    }
+
+    // -------------------------------------------------------------------------
+    // Pin polling — snapshot-on-change on the set of pinned IDs, plus edit
+    // capture for any pinned message whose `edited_timestamp` we haven't seen.
+    // This is the only current path populating raw_message_edits; broader edit
+    // visibility would require a gateway WebSocket subsystem.
+    // -------------------------------------------------------------------------
+
+    private async Task SyncChannelPinsAsync(DiscordChannelRaw source, long guildId, CancellationToken ct)
+    {
+        DiscordChannelPins pins;
+        try
+        {
+            pins = await discord.GetChannelPinsAsync(source.ChannelId.ToString(), guildId, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Forbidden)
+        {
+            logger.LogDebug(
+                "Channel {ChannelId} ({Name}): pins forbidden, skipping",
+                source.ChannelId, source.Name);
+            return;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Channel {ChannelId} ({Name}): pin fetch failed, will retry next pass",
+                source.ChannelId, source.Name);
+            return;
+        }
+
+        await SnapshotPinsIfChangedAsync(source, pins.PayloadJson, ct);
+
+        if (pins.Messages.Count == 0) return;
+
+        // Any pinned message we haven't captured yet goes into raw_messages so
+        // projection + enrichment can pick it up on their next pass. Existing
+        // rows are left untouched (Tier 1 stays immutable).
+        var rawMessages = new List<RawMessageEntity>(pins.Messages.Count);
+        var now = DateTimeOffset.UtcNow;
+        foreach (var m in pins.Messages)
+        {
+            rawMessages.Add(new RawMessageEntity
+            {
+                MessageId = m.MessageId,
+                ChannelId = m.ChannelId,
+                GuildId = m.GuildId,
+                CreatedAt = m.CreatedAt,
+                FetchedAt = now,
+                Payload = m.Payload,
+            });
+        }
+        await messageRepo.InsertAsync(rawMessages, ct);
+
+        // Edit capture: append a raw_message_edits row for every pinned message
+        // that has an edited_timestamp. ON CONFLICT on (message_id, edited_at)
+        // makes this idempotent across polls — repeated observation of the
+        // same edit produces no new rows.
+        var edits = new List<RawMessageEditEntity>();
+        foreach (var m in pins.Messages)
+        {
+            if (m.EditedAt is null) continue;
+            edits.Add(new RawMessageEditEntity
+            {
+                MessageId = m.MessageId,
+                EditedAt = m.EditedAt.Value,
+                FetchedAt = now,
+                Payload = m.Payload,
+            });
+        }
+
+        if (edits.Count > 0)
+        {
+            var inserted = await editRepo.InsertIfNewAsync(edits, ct);
+            if (inserted > 0)
+            {
+                logger.LogInformation(
+                    "Channel {ChannelId} ({Name}): captured {Count} new pinned-message edits",
+                    source.ChannelId, source.Name, inserted);
+            }
+        }
+    }
+
+    private async Task SnapshotPinsIfChangedAsync(DiscordChannelRaw source, string pinsPayloadJson, CancellationToken ct)
+    {
+        var existing = await pinRepo.GetCurrentPayloadAsync(source.ChannelId, ct);
+        if (existing is not null &&
+            PayloadCanonicalization.PinSetCanonical(existing) ==
+            PayloadCanonicalization.PinSetCanonical(pinsPayloadJson))
+        {
+            return;
+        }
+
+        await pinRepo.InsertSnapshotAsync(new RawPinEntity
+        {
+            ChannelId = source.ChannelId,
+            FetchedAt = DateTimeOffset.UtcNow,
+            Payload = pinsPayloadJson,
+        }, ct);
+
+        logger.LogInformation(
+            "Channel {ChannelId} ({Name}) pin set snapshot written ({Reason})",
+            source.ChannelId, source.Name,
+            existing is null ? "first sighting" : "pin set drifted");
     }
 }

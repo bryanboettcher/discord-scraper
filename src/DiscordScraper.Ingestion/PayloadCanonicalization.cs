@@ -23,6 +23,27 @@ internal static class PayloadCanonicalization
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Stable identity of a channel's pin set: the sorted list of pinned
+    /// message IDs. Order of the upstream array isn't authoritative — Discord
+    /// returns pins newest-first by pin time, and the set of pinned IDs is the
+    /// only thing we care about for snapshot-on-change.
+    /// </summary>
+    public static string PinSetCanonical(string pinsArrayJson)
+    {
+        using var doc = JsonDocument.Parse(pinsArrayJson);
+        if (doc.RootElement.ValueKind != JsonValueKind.Array) return "";
+
+        var ids = new List<string>(doc.RootElement.GetArrayLength());
+        foreach (var message in doc.RootElement.EnumerateArray())
+        {
+            if (message.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String)
+                ids.Add(id.GetString() ?? "");
+        }
+        ids.Sort(StringComparer.Ordinal);
+        return string.Join(",", ids);
+    }
+
     public static string ChannelCanonical(string payloadJson)
     {
         using var doc = JsonDocument.Parse(payloadJson);

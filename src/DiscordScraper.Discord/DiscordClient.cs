@@ -155,6 +155,7 @@ internal sealed class DiscordClient(
                     ChannelId: channelIdLong,
                     GuildId: guildId,
                     CreatedAt: Snowflake.ToTimestamp(messageId),
+                    EditedAt: ParseEditedTimestamp(element),
                     Payload: element.GetRawText());
 
                 if (messageId > maxId) maxId = messageId;
@@ -163,6 +164,47 @@ internal sealed class DiscordClient(
             cursor = maxId;
             if (count < pageSize) yield break;
         }
+    }
+
+    public async Task<DiscordChannelPins> GetChannelPinsAsync(string channelId, long guildId, CancellationToken ct = default)
+    {
+        using var response = await SendAsync(HttpMethod.Get, $"channels/{channelId}/pins", ct);
+        var json = await response.Content.ReadAsStringAsync(ct);
+
+        using var doc = JsonDocument.Parse(json);
+        if (doc.RootElement.ValueKind != JsonValueKind.Array)
+            return new DiscordChannelPins(PayloadJson: "[]", Messages: []);
+
+        var messages = new List<DiscordMessageRaw>(doc.RootElement.GetArrayLength());
+        foreach (var element in doc.RootElement.EnumerateArray())
+        {
+            var messageId = ParseSnowflake(element, "id");
+            var channelIdLong = ParseSnowflake(element, "channel_id");
+
+            messages.Add(new DiscordMessageRaw(
+                MessageId: messageId,
+                ChannelId: channelIdLong,
+                GuildId: guildId,
+                CreatedAt: Snowflake.ToTimestamp(messageId),
+                EditedAt: ParseEditedTimestamp(element),
+                Payload: element.GetRawText()));
+        }
+
+        return new DiscordChannelPins(PayloadJson: json, Messages: messages);
+    }
+
+    private static DateTimeOffset? ParseEditedTimestamp(JsonElement messageElement)
+    {
+        if (!messageElement.TryGetProperty("edited_timestamp", out var edited)) return null;
+        if (edited.ValueKind != JsonValueKind.String) return null;
+
+        var raw = edited.GetString();
+        if (string.IsNullOrEmpty(raw)) return null;
+
+        return DateTimeOffset.TryParse(raw, CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var parsed)
+            ? parsed
+            : null;
     }
 
     // -------------------------------------------------------------------------

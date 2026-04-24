@@ -35,6 +35,8 @@ public static class ServiceCollectionExtensions
         services.AddTransient<IIngestionRunRepository, IngestionRunRepository>();
         services.AddTransient<IMessageRepository, MessageRepository>();
         services.AddTransient<IMessageEnrichmentRepository, MessageEnrichmentRepository>();
+        services.AddTransient<IRawPinRepository, RawPinRepository>();
+        services.AddTransient<IRawMessageEditRepository, RawMessageEditRepository>();
 
         return services;
     }

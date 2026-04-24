@@ -58,4 +58,13 @@ public interface IDiscordClient
         long guildId,
         long afterSnowflake,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns the current pinned messages for a channel or thread. Response
+    /// is capped at 50 per Discord's server-side pin limit. Each returned
+    /// <see cref="DiscordMessageRaw"/> carries its <c>edited_timestamp</c> so
+    /// the sync worker can detect edits without re-fetching full histories.
+    /// <c>GET /channels/{id}/pins</c>.
+    /// </summary>
+    Task<DiscordChannelPins> GetChannelPinsAsync(string channelId, long guildId, CancellationToken ct = default);
 }
