@@ -1,6 +1,7 @@
 using DiscordScraper.Contracts;
 using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Contracts.Events.Message;
+using DiscordScraper.Contracts.Events.Sync;
 using DiscordScraper.Contracts.IR;
 using DiscordScraper.Contracts.Requests;
 using DiscordScraper.Write.Sagas;
@@ -20,6 +21,8 @@ public sealed class MessageSagaStateMachineTests
 
     private static readonly IReadOnlyList<string> StubTags = ["dotnet", "csharp"];
     private static readonly IReadOnlyList<float> StubEmbedding = [0.1f, 0.2f, 0.3f];
+    private const string StubEmbeddingModel = "nomic-embed-text";
+    private const string StubTagModel = "qwen2.5-coder:7b";
 
     private static readonly MessageIR StubIR = new(
         Body: new[] { new TextNode("hello") },
@@ -67,7 +70,9 @@ public sealed class MessageSagaStateMachineTests
                 {
                     await ctx.RespondAsync(new EnhanceMessageResponse(
                         Tags: StubTags,
-                        Embedding: StubEmbedding));
+                        Embedding: StubEmbedding,
+                        EmbeddingModelVersion: StubEmbeddingModel,
+                        TagModelVersion: StubTagModel));
                 });
 
                 cfg.AddHandler<IndexMessageRequest>(async ctx =>
@@ -160,7 +165,9 @@ public sealed class MessageSagaStateMachineTests
                 {
                     await ctx.RespondAsync(new EnhanceMessageResponse(
                         Tags: StubTags,
-                        Embedding: StubEmbedding));
+                        Embedding: StubEmbedding,
+                        EmbeddingModelVersion: StubEmbeddingModel,
+                        TagModelVersion: StubTagModel));
                 });
                 // No IndexMessage handler — saga stays in IndexMessage.Pending
             })
@@ -570,7 +577,9 @@ public sealed class MessageSagaStateMachineTests
                 {
                     await ctx.RespondAsync(new EnhanceMessageResponse(
                         Tags: StubTags,
-                        Embedding: StubEmbedding));
+                        Embedding: StubEmbedding,
+                        EmbeddingModelVersion: StubEmbeddingModel,
+                        TagModelVersion: StubTagModel));
                 });
 
                 cfg.AddHandler<IndexMessageRequest>(async ctx =>
@@ -647,7 +656,9 @@ public sealed class MessageSagaStateMachineTests
                 {
                     await ctx.RespondAsync(new EnhanceMessageResponse(
                         Tags: StubTags,
-                        Embedding: StubEmbedding));
+                        Embedding: StubEmbedding,
+                        EmbeddingModelVersion: StubEmbeddingModel,
+                        TagModelVersion: StubTagModel));
                 });
 
                 cfg.AddHandler<IndexMessageRequest>(async ctx =>
@@ -809,7 +820,9 @@ public sealed class MessageSagaStateMachineTests
                 cfg.AddHandler<EnhanceMessageRequest>(async ctx =>
                     await ctx.RespondAsync(new EnhanceMessageResponse(
                         Tags: StubTags,
-                        Embedding: StubEmbedding)));
+                        Embedding: StubEmbedding,
+                        EmbeddingModelVersion: StubEmbeddingModel,
+                        TagModelVersion: StubTagModel)));
 
                 cfg.AddHandler<IndexMessageRequest>((Func<ConsumeContext<IndexMessageRequest>, Task>)(_ =>
                     throw new InvalidOperationException("pgvector exploded")));
@@ -973,7 +986,9 @@ public sealed class MessageSagaStateMachineTests
                     await enhanceGate.Task;
                     await ctx.RespondAsync(new EnhanceMessageResponse(
                         Tags: StubTags,
-                        Embedding: StubEmbedding));
+                        Embedding: StubEmbedding,
+                        EmbeddingModelVersion: StubEmbeddingModel,
+                        TagModelVersion: StubTagModel));
                 });
 
                 cfg.AddHandler<IndexMessageRequest>(async ctx =>
@@ -1046,7 +1061,9 @@ public sealed class MessageSagaStateMachineTests
                 cfg.AddHandler<EnhanceMessageRequest>(async ctx =>
                     await ctx.RespondAsync(new EnhanceMessageResponse(
                         Tags: StubTags,
-                        Embedding: StubEmbedding)));
+                        Embedding: StubEmbedding,
+                        EmbeddingModelVersion: StubEmbeddingModel,
+                        TagModelVersion: StubTagModel)));
 
                 cfg.AddHandler<IndexMessageRequest>(async ctx =>
                 {
@@ -1128,5 +1145,338 @@ public sealed class MessageSagaStateMachineTests
         saga.ShouldNotBeNull();
         saga.MessageCreatedAt.ShouldBe(expectedCreatedAt,
             "MessageCreatedAt must match the snowflake-decoded timestamp");
+    }
+
+    // =========================================================================
+    // Re-enrichment fan-out tests (ReEmbeddingRequested / ReTagRequested)
+    // =========================================================================
+
+    // Helper: drives a saga all the way to Enriched with the given model versions stamped.
+    private static ServiceProvider BuildProviderWithModels(
+        ISystemClock clock,
+        string embeddingModel,
+        string tagModel)
+    {
+        return new ServiceCollection()
+            .AddSingleton(clock)
+            .AddMassTransitTestHarness(cfg =>
+            {
+                cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
+                    .InMemoryRepository();
+
+                cfg.AddHandler<AnalyzeMessageRequest>(async ctx =>
+                    await ctx.RespondAsync<AnalyzeMessageResponse>(new
+                    {
+                        IsSubstantive = true, IsBot = false, DetectedLanguage = "en",
+                    }));
+
+                cfg.AddHandler<ProjectMessageRequest>(async ctx =>
+                    await ctx.RespondAsync(new ProjectMessageResponse(StubIR)));
+
+                cfg.AddHandler<EnhanceMessageRequest>(async ctx =>
+                    await ctx.RespondAsync(new EnhanceMessageResponse(
+                        Tags: StubTags,
+                        Embedding: StubEmbedding,
+                        EmbeddingModelVersion: embeddingModel,
+                        TagModelVersion: tagModel)));
+
+                cfg.AddHandler<IndexMessageRequest>(async ctx =>
+                    await ctx.RespondAsync<IndexMessageResponse>(new { IndexedAt = FixedIndexedAt }));
+            })
+            .BuildServiceProvider(true);
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 21: ReEmbeddingRequested with new model version re-enters EnhanceMessage.Pending
+    //          then reaches Enriched with updated EmbeddingModelVersion.
+    // -------------------------------------------------------------------------
+
+    [Test]
+    public async Task ReEmbeddingRequested_with_new_model_triggers_re_enhance_and_stamps_version()
+    {
+        var clock = MakeClock();
+        const string oldModel = "nomic-embed-text";
+        const string newModel = "mxbai-embed-large";
+
+        var enhanceCount = 0;
+        string? lastEmbeddingModel = null;
+
+        await using var provider = new ServiceCollection()
+            .AddSingleton(clock)
+            .AddMassTransitTestHarness(cfg =>
+            {
+                cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
+                    .InMemoryRepository();
+
+                cfg.AddHandler<AnalyzeMessageRequest>(async ctx =>
+                    await ctx.RespondAsync<AnalyzeMessageResponse>(new
+                    {
+                        IsSubstantive = true, IsBot = false, DetectedLanguage = "en",
+                    }));
+
+                cfg.AddHandler<ProjectMessageRequest>(async ctx =>
+                    await ctx.RespondAsync(new ProjectMessageResponse(StubIR)));
+
+                cfg.AddHandler<EnhanceMessageRequest>(async ctx =>
+                {
+                    var n = Interlocked.Increment(ref enhanceCount);
+                    var model = n == 1 ? oldModel : newModel;
+                    lastEmbeddingModel = model;
+                    await ctx.RespondAsync(new EnhanceMessageResponse(
+                        Tags: StubTags,
+                        Embedding: StubEmbedding,
+                        EmbeddingModelVersion: model,
+                        TagModelVersion: StubTagModel));
+                });
+
+                cfg.AddHandler<IndexMessageRequest>(async ctx =>
+                    await ctx.RespondAsync<IndexMessageResponse>(new { IndexedAt = FixedIndexedAt }));
+            })
+            .BuildServiceProvider(true);
+
+        var harness = provider.GetTestHarness();
+        await harness.Start();
+
+        const long snowflake = 800000000000000001L;
+        var expectedId = DeterministicGuid.FromSnowflake(snowflake);
+        var sagaHarness = harness.GetSagaStateMachineHarness<MessageSagaStateMachine, MessageSagaState>();
+
+        // Drive saga to Enriched with old model.
+        await harness.Bus.Publish<MessageCaptured>(BuildMessageCaptured(snowflake));
+        await sagaHarness.Exists(expectedId, m => m.Enriched, timeout: TimeSpan.FromSeconds(10));
+
+        var sagaBefore = sagaHarness.Sagas.Contains(expectedId);
+        sagaBefore!.EmbeddingModelVersion.ShouldBe(oldModel);
+
+        // Publish re-embedding request — cutoff after LastUpdatedAt so this saga matches.
+        await harness.Bus.Publish<ReEmbeddingRequested>(new
+        {
+            ModelVersion = newModel,
+            Cutoff = FixedNow.AddHours(1),
+        });
+
+        // Saga should leave Enriched, enter EnhanceMessage.Pending, then return to Enriched.
+        var machine = provider.GetRequiredService<MessageSagaStateMachine>();
+        await sagaHarness.Exists(expectedId, machine.EnhanceMessage.Pending, timeout: TimeSpan.FromSeconds(5));
+        await sagaHarness.Exists(expectedId, m => m.Enriched, timeout: TimeSpan.FromSeconds(10));
+
+        var sagaAfter = sagaHarness.Sagas.Contains(expectedId);
+        sagaAfter!.EmbeddingModelVersion.ShouldBe(newModel, "EmbeddingModelVersion must be stamped from response");
+        enhanceCount.ShouldBe(2, "EnhanceMessage should run twice: initial + re-embed");
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 22: ReEmbeddingRequested with same model version — saga NOT matched (no re-enhance).
+    // -------------------------------------------------------------------------
+
+    [Test]
+    public async Task ReEmbeddingRequested_same_model_version_does_not_match()
+    {
+        var clock = MakeClock();
+
+        await using var provider = BuildProviderWithModels(clock, StubEmbeddingModel, StubTagModel);
+        var harness = provider.GetTestHarness();
+        await harness.Start();
+
+        const long snowflake = 801000000000000001L;
+        var expectedId = DeterministicGuid.FromSnowflake(snowflake);
+        var sagaHarness = harness.GetSagaStateMachineHarness<MessageSagaStateMachine, MessageSagaState>();
+
+        await harness.Bus.Publish<MessageCaptured>(BuildMessageCaptured(snowflake));
+        await sagaHarness.Exists(expectedId, m => m.Enriched, timeout: TimeSpan.FromSeconds(10));
+
+        // Same model version — CorrelateBy predicate rejects this saga.
+        await harness.Bus.Publish<ReEmbeddingRequested>(new
+        {
+            ModelVersion = StubEmbeddingModel,
+            Cutoff = FixedNow.AddHours(1),
+        });
+
+        await Task.Delay(300);
+
+        var saga = sagaHarness.Sagas.Contains(expectedId);
+        saga!.CurrentState.ShouldBe("Enriched", "Saga must not be disturbed when model version matches");
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 23: ReEmbeddingRequested with cutoff BEFORE saga.LastUpdatedAt — no match.
+    // -------------------------------------------------------------------------
+
+    [Test]
+    public async Task ReEmbeddingRequested_cutoff_before_last_updated_at_does_not_match()
+    {
+        var clock = MakeClock();
+
+        await using var provider = BuildProviderWithModels(clock, StubEmbeddingModel, StubTagModel);
+        var harness = provider.GetTestHarness();
+        await harness.Start();
+
+        const long snowflake = 802000000000000001L;
+        var expectedId = DeterministicGuid.FromSnowflake(snowflake);
+        var sagaHarness = harness.GetSagaStateMachineHarness<MessageSagaStateMachine, MessageSagaState>();
+
+        await harness.Bus.Publish<MessageCaptured>(BuildMessageCaptured(snowflake));
+        await sagaHarness.Exists(expectedId, m => m.Enriched, timeout: TimeSpan.FromSeconds(10));
+
+        // Cutoff in the past (before FixedNow = LastUpdatedAt) — predicate rejects.
+        await harness.Bus.Publish<ReEmbeddingRequested>(new
+        {
+            ModelVersion = "mxbai-embed-large",
+            Cutoff = FixedNow.AddHours(-1),
+        });
+
+        await Task.Delay(300);
+
+        var saga = sagaHarness.Sagas.Contains(expectedId);
+        saga!.CurrentState.ShouldBe("Enriched", "Cutoff before LastUpdatedAt must exclude the saga");
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 24: ReEmbeddingRequested while saga is not in Enriched — no match.
+    // -------------------------------------------------------------------------
+
+    [Test]
+    public async Task ReEmbeddingRequested_saga_not_in_Enriched_is_not_matched()
+    {
+        var clock = MakeClock();
+
+        // Provider that parks at AnalyzeMessage.Pending (no handler).
+        await using var provider = new ServiceCollection()
+            .AddSingleton(clock)
+            .AddMassTransitTestHarness(cfg =>
+            {
+                cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
+                    .InMemoryRepository();
+                // No AnalyzeMessage handler — saga stays in AnalyzeMessage.Pending.
+            })
+            .BuildServiceProvider(true);
+
+        var harness = provider.GetTestHarness();
+        await harness.Start();
+
+        const long snowflake = 803000000000000001L;
+        var expectedId = DeterministicGuid.FromSnowflake(snowflake);
+        var sagaHarness = harness.GetSagaStateMachineHarness<MessageSagaStateMachine, MessageSagaState>();
+        var machine = provider.GetRequiredService<MessageSagaStateMachine>();
+
+        await harness.Bus.Publish<MessageCaptured>(BuildMessageCaptured(snowflake));
+        await sagaHarness.Exists(expectedId, machine.AnalyzeMessage.Pending, timeout: TimeSpan.FromSeconds(5));
+
+        await harness.Bus.Publish<ReEmbeddingRequested>(new
+        {
+            ModelVersion = "mxbai-embed-large",
+            Cutoff = FixedNow.AddHours(1),
+        });
+
+        await Task.Delay(300);
+
+        // Saga is in AnalyzeMessage_Pending — CorrelateBy requires CurrentState == "Enriched".
+        var saga = sagaHarness.Sagas.Contains(expectedId);
+        saga!.CurrentState.ShouldNotBe("Enriched",
+            "Saga in non-Enriched state must not be matched by ReEmbeddingRequested");
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 25: ReTagRequested with new model version re-enters Enhance and stamps TagModelVersion.
+    // -------------------------------------------------------------------------
+
+    [Test]
+    public async Task ReTagRequested_with_new_model_triggers_re_enhance_and_stamps_version()
+    {
+        var clock = MakeClock();
+        const string oldTagModel = "qwen2.5-coder:7b";
+        const string newTagModel = "llama3.1:70b";
+
+        var enhanceCount = 0;
+        await using var provider = new ServiceCollection()
+            .AddSingleton(clock)
+            .AddMassTransitTestHarness(cfg =>
+            {
+                cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
+                    .InMemoryRepository();
+
+                cfg.AddHandler<AnalyzeMessageRequest>(async ctx =>
+                    await ctx.RespondAsync<AnalyzeMessageResponse>(new
+                    {
+                        IsSubstantive = true, IsBot = false, DetectedLanguage = "en",
+                    }));
+
+                cfg.AddHandler<ProjectMessageRequest>(async ctx =>
+                    await ctx.RespondAsync(new ProjectMessageResponse(StubIR)));
+
+                cfg.AddHandler<EnhanceMessageRequest>(async ctx =>
+                {
+                    var n = Interlocked.Increment(ref enhanceCount);
+                    var tagModel = n == 1 ? oldTagModel : newTagModel;
+                    await ctx.RespondAsync(new EnhanceMessageResponse(
+                        Tags: StubTags,
+                        Embedding: StubEmbedding,
+                        EmbeddingModelVersion: StubEmbeddingModel,
+                        TagModelVersion: tagModel));
+                });
+
+                cfg.AddHandler<IndexMessageRequest>(async ctx =>
+                    await ctx.RespondAsync<IndexMessageResponse>(new { IndexedAt = FixedIndexedAt }));
+            })
+            .BuildServiceProvider(true);
+
+        var harness = provider.GetTestHarness();
+        await harness.Start();
+
+        const long snowflake = 810000000000000001L;
+        var expectedId = DeterministicGuid.FromSnowflake(snowflake);
+        var sagaHarness = harness.GetSagaStateMachineHarness<MessageSagaStateMachine, MessageSagaState>();
+
+        await harness.Bus.Publish<MessageCaptured>(BuildMessageCaptured(snowflake));
+        await sagaHarness.Exists(expectedId, m => m.Enriched, timeout: TimeSpan.FromSeconds(10));
+
+        var sagaBefore = sagaHarness.Sagas.Contains(expectedId);
+        sagaBefore!.TagModelVersion.ShouldBe(oldTagModel);
+
+        await harness.Bus.Publish<ReTagRequested>(new
+        {
+            ModelVersion = newTagModel,
+            Cutoff = FixedNow.AddHours(1),
+        });
+
+        var machine = provider.GetRequiredService<MessageSagaStateMachine>();
+        await sagaHarness.Exists(expectedId, machine.EnhanceMessage.Pending, timeout: TimeSpan.FromSeconds(5));
+        await sagaHarness.Exists(expectedId, m => m.Enriched, timeout: TimeSpan.FromSeconds(10));
+
+        var sagaAfter = sagaHarness.Sagas.Contains(expectedId);
+        sagaAfter!.TagModelVersion.ShouldBe(newTagModel, "TagModelVersion must be stamped from response");
+        enhanceCount.ShouldBe(2, "EnhanceMessage should run twice: initial + re-tag");
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 26: ReTagRequested with same model version — saga NOT matched.
+    // -------------------------------------------------------------------------
+
+    [Test]
+    public async Task ReTagRequested_same_model_version_does_not_match()
+    {
+        var clock = MakeClock();
+
+        await using var provider = BuildProviderWithModels(clock, StubEmbeddingModel, StubTagModel);
+        var harness = provider.GetTestHarness();
+        await harness.Start();
+
+        const long snowflake = 811000000000000001L;
+        var expectedId = DeterministicGuid.FromSnowflake(snowflake);
+        var sagaHarness = harness.GetSagaStateMachineHarness<MessageSagaStateMachine, MessageSagaState>();
+
+        await harness.Bus.Publish<MessageCaptured>(BuildMessageCaptured(snowflake));
+        await sagaHarness.Exists(expectedId, m => m.Enriched, timeout: TimeSpan.FromSeconds(10));
+
+        await harness.Bus.Publish<ReTagRequested>(new
+        {
+            ModelVersion = StubTagModel,
+            Cutoff = FixedNow.AddHours(1),
+        });
+
+        await Task.Delay(300);
+
+        var saga = sagaHarness.Sagas.Contains(expectedId);
+        saga!.CurrentState.ShouldBe("Enriched", "Saga must not be disturbed when tag model version matches");
     }
 }

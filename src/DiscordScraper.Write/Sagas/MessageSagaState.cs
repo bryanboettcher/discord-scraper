@@ -65,6 +65,18 @@ public sealed class MessageSagaState : SagaStateMachineInstance, ISagaVersion, I
     public float[]? Embedding { get; set; }
     public DateTimeOffset? IndexedAt { get; set; }
 
+    /// <summary>
+    /// Model version used for the most recent embedding. Stamped from EnhanceMessageResponse.
+    /// ReEmbeddingRequested matches sagas where this differs from the requested ModelVersion.
+    /// </summary>
+    public string? EmbeddingModelVersion { get; set; }
+
+    /// <summary>
+    /// Model version used for the most recent tagging pass. Stamped from EnhanceMessageResponse.
+    /// ReTagRequested matches sagas where this differs from the requested ModelVersion.
+    /// </summary>
+    public string? TagModelVersion { get; set; }
+
     // --- Edit tracking ---
 
     /// <summary>EditedTimestamp from the most recent MessageEditObserved event.</summary>

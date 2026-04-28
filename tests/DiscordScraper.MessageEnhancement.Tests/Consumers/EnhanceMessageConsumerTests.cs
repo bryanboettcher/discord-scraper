@@ -196,4 +196,42 @@ public sealed class EnhanceMessageConsumerTests
         capturedTagCt.ShouldNotBe(CancellationToken.None);
         capturedEmbedCt.ShouldNotBe(CancellationToken.None);
     }
+
+    // -------------------------------------------------------------------------
+    // Model version stamping — required for re-enrichment fan-out
+    // -------------------------------------------------------------------------
+
+    [Test]
+    public async Task Response_carries_embedding_model_version_from_client()
+    {
+        _embedding.Model.Returns("mxbai-embed-large");
+        _tagging.Model.Returns("qwen2.5-coder:7b");
+
+        _tagging.TagAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new TagResult(["test"], IsSubstantive: true));
+        _embedding.EmbedAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new ReadOnlyMemory<float>(new float[768]));
+
+        var client = _harness.GetRequestClient<EnhanceMessageRequest>();
+        var response = await client.GetResponse<EnhanceMessageResponse>(BuildRequest());
+
+        response.Message.EmbeddingModelVersion.ShouldBe("mxbai-embed-large");
+    }
+
+    [Test]
+    public async Task Response_carries_tag_model_version_from_client()
+    {
+        _embedding.Model.Returns("nomic-embed-text");
+        _tagging.Model.Returns("llama3.1:70b");
+
+        _tagging.TagAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new TagResult(["test"], IsSubstantive: true));
+        _embedding.EmbedAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new ReadOnlyMemory<float>(new float[768]));
+
+        var client = _harness.GetRequestClient<EnhanceMessageRequest>();
+        var response = await client.GetResponse<EnhanceMessageResponse>(BuildRequest());
+
+        response.Message.TagModelVersion.ShouldBe("llama3.1:70b");
+    }
 }

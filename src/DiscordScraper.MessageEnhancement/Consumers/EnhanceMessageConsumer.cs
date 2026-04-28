@@ -40,6 +40,8 @@ public sealed class EnhanceMessageConsumer(
 
         await context.RespondAsync(new EnhanceMessageResponse(
             Tags: tagResult.TopicTags,
-            Embedding: vector.ToArray()));
+            Embedding: vector.ToArray(),
+            EmbeddingModelVersion: embedding.Model,
+            TagModelVersion: tagging.Model));
     }
 }

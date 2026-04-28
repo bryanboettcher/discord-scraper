@@ -47,7 +47,7 @@ public sealed class GuildSagaStateMachine : MassTransitStateMachine<GuildSagaSta
             e.CorrelateBy((saga, ctx) =>
                 saga.LastSyncedAt < ctx.Message.StaleAfter
                 && saga.IsPresent
-                && saga.CurrentState != "Syncing");
+                && saga.CurrentState != nameof(Syncing));
 
             // Heartbeats that don't match any saga are silently discarded — correct behaviour
             // since heartbeats never bootstrap new sagas (only SyncRequested does that).

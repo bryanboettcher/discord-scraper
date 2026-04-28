@@ -1,6 +1,7 @@
 using DiscordScraper.Contracts;
 using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Contracts.Events.Message;
+using DiscordScraper.Contracts.Events.Sync;
 using DiscordScraper.Contracts.IR;
 using DiscordScraper.Contracts.Requests;
 using MassTransit;
@@ -32,6 +33,8 @@ public sealed class MessageSagaStateMachine : MassTransitStateMachine<MessageSag
 
     public Event<MessageCaptured> MessageCaptured { get; private set; } = null!;
     public Event<MessageEditObserved> MessageEditObserved { get; private set; } = null!;
+    public Event<ReEmbeddingRequested> ReEmbeddingRequested { get; private set; } = null!;
+    public Event<ReTagRequested> ReTagRequested { get; private set; } = null!;
 
     public Request<MessageSagaState, AnalyzeMessageRequest, AnalyzeMessageResponse> AnalyzeMessage { get; private set; } = null!;
     public Request<MessageSagaState, ProjectMessageRequest, ProjectMessageResponse> ProjectMessage { get; private set; } = null!;
@@ -72,6 +75,28 @@ public sealed class MessageSagaStateMachine : MassTransitStateMachine<MessageSag
 
         Event(() => MessageEditObserved, e =>
             e.CorrelateById(ctx => DeterministicGuid.FromSnowflake(ctx.Message.MessageSnowflake)));
+
+        // CorrelateBy dispatches one event to every matching saga, serially. Same pattern as
+        // GuildSagaStateMachine's SyncHeartbeat fan-out. The Cutoff prevents a saga that just
+        // completed re-enrichment from immediately re-matching if its new model version hasn't
+        // been written to the DB yet.
+        Event(() => ReEmbeddingRequested, e =>
+        {
+            e.CorrelateBy((saga, ctx) =>
+                saga.CurrentState == nameof(Enriched)
+                && saga.EmbeddingModelVersion != ctx.Message.ModelVersion
+                && saga.LastUpdatedAt < ctx.Message.Cutoff);
+            e.OnMissingInstance(m => m.Discard());
+        });
+
+        Event(() => ReTagRequested, e =>
+        {
+            e.CorrelateBy((saga, ctx) =>
+                saga.CurrentState == nameof(Enriched)
+                && saga.TagModelVersion != ctx.Message.ModelVersion
+                && saga.LastUpdatedAt < ctx.Message.Cutoff);
+            e.OnMissingInstance(m => m.Discard());
+        });
     }
 
     private void ConfigureRequests()
@@ -162,6 +187,8 @@ public sealed class MessageSagaStateMachine : MassTransitStateMachine<MessageSag
                 {
                     ctx.Saga.Tags = ctx.Message.Tags;
                     ctx.Saga.Embedding = ctx.Message.Embedding.ToArray();
+                    ctx.Saga.EmbeddingModelVersion = ctx.Message.EmbeddingModelVersion;
+                    ctx.Saga.TagModelVersion = ctx.Message.TagModelVersion;
                     ctx.Saga.LastUpdatedAt = clock.UtcNow;
                 })
                 .IfElse(
@@ -244,8 +271,9 @@ public sealed class MessageSagaStateMachine : MassTransitStateMachine<MessageSag
 
     private void ConfigureEnriched(ISystemClock clock)
     {
-        // Enriched is the steady state. Any edit re-enters the full Project → Enhance → Index loop
-        // so the embedding always reflects current content.
+        // Enriched is the steady state. Edits re-enter the full Project → Enhance → Index loop.
+        // Re-enrichment events skip projection (content hasn't changed) and jump straight to
+        // Enhance → Index, re-running both tagging and embedding under the new model.
         During(Enriched,
             RequestProjectAndPark(
                 When(MessageEditObserved)
@@ -254,7 +282,15 @@ public sealed class MessageSagaStateMachine : MassTransitStateMachine<MessageSag
                         ctx.Saga.EditedTimestamp = ctx.Message.EditedAt;
                         ctx.Saga.PayloadJson = ctx.Message.UpdatedPayloadJson;
                         ctx.Saga.LastUpdatedAt = clock.UtcNow;
-                    })));
+                    })),
+
+            RequestEnhanceAndPark(
+                When(ReEmbeddingRequested)
+                    .Then(ctx => ctx.Saga.LastUpdatedAt = clock.UtcNow)),
+
+            RequestEnhanceAndPark(
+                When(ReTagRequested)
+                    .Then(ctx => ctx.Saga.LastUpdatedAt = clock.UtcNow)));
     }
 
     private void ConfigureEditTracking()
@@ -293,6 +329,24 @@ public sealed class MessageSagaStateMachine : MassTransitStateMachine<MessageSag
                 ctx.Saga.PayloadJson,
             }))
             .TransitionTo(ProjectMessage.Pending);
+
+    /// <summary>
+    /// Issues an EnhanceMessageRequest directly and transitions to EnhanceMessage.Pending.
+    /// Used by re-enrichment fan-out events (ReEmbeddingRequested, ReTagRequested) when content
+    /// hasn't changed — projection is skipped, but both tagging and embedding are re-run under
+    /// the new model. The saga must already have IR populated (i.e. must be in Enriched state).
+    /// </summary>
+    private EventActivityBinder<MessageSagaState, T> RequestEnhanceAndPark<T>(
+        EventActivityBinder<MessageSagaState, T> binder)
+        where T : class =>
+        binder
+            .Request(EnhanceMessage, ctx => ctx.Init<EnhanceMessageRequest>(new
+            {
+                ctx.Saga.MessageSnowflake,
+                IR = ctx.Saga.IR!,
+                PlainText = IrTextFlattener.Flatten(ctx.Saga.IR!),
+            }))
+            .TransitionTo(EnhanceMessage.Pending);
 
     private EventActivities<MessageSagaState> FaultedHandler<TRequest, TResponse>(
         Request<MessageSagaState, TRequest, TResponse> request,
