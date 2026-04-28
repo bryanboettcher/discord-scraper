@@ -18,6 +18,7 @@ public sealed class TestGuildChanged : GuildChanged
 {
     public long GuildId { get; init; }
     public string Name { get; init; } = string.Empty;
+    public IReadOnlyList<GuildRole> Roles { get; init; } = [];
     public string CurrentState { get; init; } = string.Empty;
     public DateTimeOffset LastUpdatedAt { get; set; }
     public Guid CorrelationId => Guid.NewGuid();

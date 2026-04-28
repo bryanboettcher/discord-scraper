@@ -18,5 +18,6 @@ public static partial class GuildReadModelMapper
     [MapProperty(nameof(GuildChanged.LastUpdatedAt), nameof(ReadGuild.UpdatedAt))]
     [MapperIgnoreSource(nameof(GuildChanged.CurrentState))]
     [MapperIgnoreSource(nameof(GuildChanged.CorrelationId))]
+    [MapperIgnoreSource(nameof(GuildChanged.Roles))]
     public static partial ReadGuild ToReadGuild(GuildChanged evt);
 }

@@ -1,34 +1,52 @@
-using Microsoft.Extensions.Logging;
+using DiscordScraper.Write.Sagas;
+using MongoDB.Driver;
 
 namespace DiscordScraper.Write.Repositories;
 
 /// <summary>
-/// Stub implementation — GuildSagaState does not yet carry role metadata.
-///
-/// GuildSyncConsumer fetches and stores guild Name and ChannelCount but does not capture
-/// guild.roles[]. Until GuildSyncConsumer is extended to persist role id/name pairs on
-/// GuildSagaState, there is nothing to query and ProjectMessageConsumer renders all role
-/// mentions as "&lt;unknown role&gt;".
+/// Resolves role display names from the Roles array persisted on GuildSagaState.
+/// One network round-trip per guild regardless of how many role ids are requested.
 /// </summary>
-internal sealed class MongoGuildRoleNameRepo(ILogger<MongoGuildRoleNameRepo> logger) : IGuildRoleNameRepo
+internal sealed class MongoGuildRoleNameRepo(IMongoDatabase db) : IGuildRoleNameRepo
 {
+    // Must match the collection name in SagaRegistrationExtensions.
+    private const string CollectionName = "guild_sagas";
+
     private static readonly IReadOnlyDictionary<long, string> EmptyResult = new Dictionary<long, string>();
 
-    public Task<IReadOnlyDictionary<long, string>> GetRoleNamesAsync(
+    // Project only GuildId and Roles — the saga document can be large (channels, cursors, etc.).
+    private static readonly ProjectionDefinition<GuildSagaState> Projection =
+        Builders<GuildSagaState>.Projection
+            .Include(s => s.GuildId)
+            .Include(s => s.Roles);
+
+    public async Task<IReadOnlyDictionary<long, string>> GetRoleNamesAsync(
         long guildId,
         IReadOnlyCollection<long> roleIds,
         CancellationToken ct)
     {
-        if (roleIds.Count > 0)
+        if (roleIds.Count == 0)
+            return EmptyResult;
+
+        var collection = db.GetCollection<GuildSagaState>(CollectionName);
+        var filter = Builders<GuildSagaState>.Filter.Eq(s => s.GuildId, guildId);
+
+        var state = await collection
+            .Find(filter)
+            .Project<GuildSagaState>(Projection)
+            .FirstOrDefaultAsync(ct);
+
+        if (state is null || state.Roles.Count == 0)
+            return EmptyResult;
+
+        var idSet = roleIds.ToHashSet();
+        var dict = new Dictionary<long, string>();
+        foreach (var role in state.Roles)
         {
-            // Warn once per call so the gap is visible in logs without being noisy per-message.
-            logger.LogWarning(
-                "Role name lookup requested for {Count} role(s) in guild {GuildId} but GuildSagaState " +
-                "does not carry role metadata yet. All role mentions will render as '<unknown role>'. " +
-                "Extend GuildSyncConsumer to capture guild.roles[] to resolve this.",
-                roleIds.Count, guildId);
+            if (idSet.Contains(role.Id) && !string.IsNullOrEmpty(role.Name))
+                dict[role.Id] = role.Name;
         }
 
-        return Task.FromResult(EmptyResult);
+        return dict;
     }
 }

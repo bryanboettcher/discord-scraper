@@ -20,6 +20,8 @@ public sealed class TestChannelChanged : ChannelChanged
     public long GuildId { get; init; }
     public string Name { get; init; } = string.Empty;
     public string? Topic { get; init; }
+    public int ChannelType { get; init; }
+    public long? ParentId { get; init; }
     public string CurrentState { get; init; } = string.Empty;
     public DateTimeOffset LastUpdatedAt { get; set; }
     public Guid CorrelationId => Guid.NewGuid();
@@ -90,8 +92,15 @@ public sealed class ChannelReadConsumerTests
         long channelId = 111L,
         long guildId = 222L,
         string name = "general",
-        string? topic = null) =>
-        new() { ChannelId = channelId, GuildId = guildId, Name = name, Topic = topic, CurrentState = "Active", LastUpdatedAt = _testTime };
+        string? topic = null,
+        int channelType = 0,
+        long? parentId = null) =>
+        new()
+        {
+            ChannelId = channelId, GuildId = guildId, Name = name, Topic = topic,
+            ChannelType = channelType, ParentId = parentId,
+            CurrentState = "Active", LastUpdatedAt = _testTime,
+        };
 
     // ---------------------------------------------------------------------------
     // Tests
@@ -181,6 +190,58 @@ public sealed class ChannelReadConsumerTests
     }
 
     [Test]
+    public async Task TextChannel_TypeAndParentIdMappedCorrectly()
+    {
+        ReadChannel? captured = null;
+
+        var writer = Substitute.For<IReadBulkWriter>();
+        writer.When(w => w.WriteAsync(
+                Arg.Any<ReadDbContext>(),
+                Arg.Any<IDbContextTransaction>(),
+                Arg.Any<IReadOnlyDictionary<Type, IList<object>>>(),
+                Arg.Any<CancellationToken>()))
+            .Do(call =>
+            {
+                var dict = call.ArgAt<IReadOnlyDictionary<Type, IList<object>>>(2);
+                captured = (ReadChannel)dict[typeof(ReadChannel)][0];
+            });
+
+        var consumer = new ChannelReadConsumer(BuildFactory(), writer, NullLogger<ChannelReadConsumer>.Instance);
+        // Type=0 (text), ParentId=null (top-level channel)
+        await consumer.Consume(BuildBatchContext(MakeEvent(channelType: 0, parentId: null)));
+
+        captured.ShouldNotBeNull();
+        captured.Type.ShouldBe((short)0);
+        captured.ParentId.ShouldBeNull();
+    }
+
+    [Test]
+    public async Task PublicThread_TypeAndParentIdMappedCorrectly()
+    {
+        ReadChannel? captured = null;
+
+        var writer = Substitute.For<IReadBulkWriter>();
+        writer.When(w => w.WriteAsync(
+                Arg.Any<ReadDbContext>(),
+                Arg.Any<IDbContextTransaction>(),
+                Arg.Any<IReadOnlyDictionary<Type, IList<object>>>(),
+                Arg.Any<CancellationToken>()))
+            .Do(call =>
+            {
+                var dict = call.ArgAt<IReadOnlyDictionary<Type, IList<object>>>(2);
+                captured = (ReadChannel)dict[typeof(ReadChannel)][0];
+            });
+
+        var consumer = new ChannelReadConsumer(BuildFactory(), writer, NullLogger<ChannelReadConsumer>.Instance);
+        // Type=11 (PUBLIC_THREAD), ParentId=12345 (parent text channel)
+        await consumer.Consume(BuildBatchContext(MakeEvent(channelType: 11, parentId: 12345L)));
+
+        captured.ShouldNotBeNull();
+        captured.Type.ShouldBe((short)11);
+        captured.ParentId.ShouldBe(12345L);
+    }
+
+    [Test]
     public async Task FieldMapping_AllScalarFieldsProjectedCorrectly()
     {
         ReadChannel? captured = null;
@@ -206,9 +267,9 @@ public sealed class ChannelReadConsumerTests
         captured.GuildId.ShouldBe(888L);
         captured.Name.ShouldBe("dev-chat");
         captured.Topic.ShouldBe("all code");
-        // LastUpdatedAt → UpdatedAt mapping
+        // LastUpdatedAt → UpdatedAt name-mismatch mapping
         captured.UpdatedAt.ShouldBe(_testTime);
-        // Type and ParentId not on contract; Mapperly leaves them at defaults
+        // ChannelType → Type name-mismatch mapping
         captured.Type.ShouldBe((short)0);
         captured.ParentId.ShouldBeNull();
     }

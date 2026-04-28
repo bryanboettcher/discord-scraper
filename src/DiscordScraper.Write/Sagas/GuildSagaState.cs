@@ -1,5 +1,6 @@
 using DiscordScraper.Contracts;
 using DiscordScraper.Contracts.Events;
+using DiscordScraper.Contracts.Events.Guild;
 using MassTransit;
 
 namespace DiscordScraper.Write.Sagas;
@@ -28,4 +29,10 @@ public sealed class GuildSagaState : SagaStateMachineInstance, ISagaVersion, ITi
     public string Name { get; set; } = string.Empty;
     public DateTimeOffset LastSyncedAt { get; set; }
     public int LastSyncChannelCount { get; set; }
+
+    /// <summary>
+    /// Authoritative role snapshot from the last GuildChanged. Replaced wholesale on each
+    /// sync — Discord ships the full list every time. @everyone is excluded before publish.
+    /// </summary>
+    public IReadOnlyList<GuildRole> Roles { get; set; } = [];
 }

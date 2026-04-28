@@ -21,6 +21,22 @@ public sealed class GuildSyncConsumerTests
 
     private static readonly DiscordGuildRaw TestGuild = new(GuildId, "Test Guild", "{}");
 
+    // Payload with 3 named roles + the @everyone role (id == GuildId). @everyone must be filtered out.
+    private static readonly string RolePayload = $$"""
+        {
+            "id": "{{GuildId}}",
+            "name": "Test Guild",
+            "roles": [
+                { "id": "{{GuildId}}", "name": "@everyone" },
+                { "id": "1001", "name": "Admin" },
+                { "id": "1002", "name": "Moderator" },
+                { "id": "1003", "name": "Member" }
+            ]
+        }
+        """;
+
+    private static readonly DiscordGuildRaw TestGuildWithRoles = new(GuildId, "Test Guild", RolePayload);
+
     private static DiscordChannelRaw MakeChannel(long id, int type = 0) =>
         new(id, GuildId, type, null, $"channel-{id}", "{}");
 
@@ -146,6 +162,131 @@ public sealed class GuildSyncConsumerTests
 
         // No channel sync requests published — the exception aborted the publish loop
         harness.Published.Select<ChannelSyncRequested>().ShouldBeEmpty();
+    }
+
+    // ---------------------------------------------------------------------------
+    // Roles extraction: 3 named roles + @everyone in payload → GuildChanged carries 3, no @everyone
+    // ---------------------------------------------------------------------------
+
+    [Test]
+    public async Task Consume_GuildPayloadWithRoles_GuildChangedCarriesRolesMinusEveryone()
+    {
+        var discord = Substitute.For<IDiscordClient>();
+        discord.GetGuildAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(TestGuildWithRoles);
+        discord.GetGuildChannelsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns([]);
+        discord.GetGuildActiveThreadsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns([]);
+
+        var cursorRepo = Substitute.For<IChannelCursorRepo>();
+        cursorRepo.GetCursorsAsync(Arg.Any<IReadOnlyCollection<long>>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyDictionary<long, long>>(new Dictionary<long, long>()));
+
+        await using var provider = BuildProvider(discord, cursorRepo);
+        var harness = provider.GetTestHarness();
+        await harness.Start();
+
+        await harness.Bus.Publish<GuildSyncRequested>(new
+        {
+            CorrelationId = DeterministicGuid.FromSnowflake(GuildId),
+            GuildId = GuildId, CurrentState = "Requested", LastUpdatedAt = DateTimeOffset.UtcNow,
+        });
+
+        (await harness.Published.Any<GuildChanged>()).ShouldBeTrue();
+
+        var guildChanged = harness.Published.Select<GuildChanged>().Single().Context.Message;
+
+        guildChanged.Roles.Count.ShouldBe(3, "@everyone should be filtered out, leaving 3 roles");
+
+        var roleIds = guildChanged.Roles.Select(r => r.Id).ToHashSet();
+        roleIds.ShouldContain(1001L);
+        roleIds.ShouldContain(1002L);
+        roleIds.ShouldContain(1003L);
+        roleIds.ShouldNotContain(GuildId, "@everyone role id equals GuildId and must be excluded");
+
+        var names = guildChanged.Roles.ToDictionary(r => r.Id, r => r.Name);
+        names[1001L].ShouldBe("Admin");
+        names[1002L].ShouldBe("Moderator");
+        names[1003L].ShouldBe("Member");
+    }
+
+    // ---------------------------------------------------------------------------
+    // Empty payload (no roles field) → GuildChanged carries empty list, no fault
+    // ---------------------------------------------------------------------------
+
+    [Test]
+    public async Task Consume_GuildPayloadWithNoRolesField_GuildChangedCarriesEmptyRoles()
+    {
+        var discord = Substitute.For<IDiscordClient>();
+        discord.GetGuildAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(TestGuild);
+        discord.GetGuildChannelsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns([]);
+        discord.GetGuildActiveThreadsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns([]);
+
+        var cursorRepo = Substitute.For<IChannelCursorRepo>();
+        cursorRepo.GetCursorsAsync(Arg.Any<IReadOnlyCollection<long>>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyDictionary<long, long>>(new Dictionary<long, long>()));
+
+        await using var provider = BuildProvider(discord, cursorRepo);
+        var harness = provider.GetTestHarness();
+        await harness.Start();
+
+        await harness.Bus.Publish<GuildSyncRequested>(new
+        {
+            CorrelationId = DeterministicGuid.FromSnowflake(GuildId),
+            GuildId = GuildId, CurrentState = "Requested", LastUpdatedAt = DateTimeOffset.UtcNow,
+        });
+
+        (await harness.Published.Any<GuildChanged>()).ShouldBeTrue();
+
+        var guildChanged = harness.Published.Select<GuildChanged>().Single().Context.Message;
+        guildChanged.Roles.ShouldBeEmpty("empty payload has no roles array");
+    }
+
+    // ---------------------------------------------------------------------------
+    // ChannelChanged published with ChannelType + ParentId from Discord model
+    // ---------------------------------------------------------------------------
+
+    [Test]
+    public async Task Consume_PublishesChannelChanged_WithTypeAndParentId()
+    {
+        // Thread (type=11) with a parent channel
+        var thread = new DiscordChannelRaw(5001L, GuildId, 11, 5000L, "my-thread", "{}");
+        var textChannel = MakeChannel(5000L, type: 0);
+
+        var discord = Substitute.For<IDiscordClient>();
+        discord.GetGuildAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(TestGuildWithRoles);
+        discord.GetGuildChannelsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns([textChannel]);
+        discord.GetGuildActiveThreadsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns([thread]);
+
+        var cursorRepo = Substitute.For<IChannelCursorRepo>();
+        cursorRepo.GetCursorsAsync(Arg.Any<IReadOnlyCollection<long>>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyDictionary<long, long>>(new Dictionary<long, long>()));
+
+        await using var provider = BuildProvider(discord, cursorRepo);
+        var harness = provider.GetTestHarness();
+        await harness.Start();
+
+        await harness.Bus.Publish<GuildSyncRequested>(new
+        {
+            CorrelationId = DeterministicGuid.FromSnowflake(GuildId),
+            GuildId = GuildId, CurrentState = "Requested", LastUpdatedAt = DateTimeOffset.UtcNow,
+        });
+
+        (await harness.Published.Any<GuildChanged>()).ShouldBeTrue("GuildChanged signals consumer completed");
+
+        var channelChangedByChannel = harness.Published.Select<ChannelChanged>()
+            .Select(p => p.Context.Message)
+            .ToDictionary(m => m.ChannelId);
+
+        channelChangedByChannel.Count.ShouldBe(2, "One ChannelChanged per discovered channel");
+
+        var textMsg = channelChangedByChannel[5000L];
+        textMsg.ChannelType.ShouldBe(0);
+        textMsg.ParentId.ShouldBeNull();
+
+        var threadMsg = channelChangedByChannel[5001L];
+        threadMsg.ChannelType.ShouldBe(11);
+        threadMsg.ParentId.ShouldBe(5000L);
     }
 
     // ---------------------------------------------------------------------------

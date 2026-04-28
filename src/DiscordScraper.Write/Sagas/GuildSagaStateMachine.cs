@@ -51,18 +51,19 @@ public sealed class GuildSagaStateMachine : MassTransitStateMachine<GuildSagaSta
                 .TransitionTo(Syncing),
 
             // GuildChanged received while already Synced (e.g., gateway push) — update in place.
-            When(Changed).Then(ctx => ApplyChanged(ctx.Saga, ctx.Message.Name, clock)));
+            When(Changed).Then(ctx => ApplyChanged(ctx.Saga, ctx.Message, clock)));
 
         // GuildChanged received during Syncing settles the saga.
         During(Syncing,
             When(Changed)
-                .Then(ctx => ApplyChanged(ctx.Saga, ctx.Message.Name, clock))
+                .Then(ctx => ApplyChanged(ctx.Saga, ctx.Message, clock))
                 .TransitionTo(Synced));
     }
 
-    private static void ApplyChanged(GuildSagaState saga, string name, ISystemClock clock)
+    private static void ApplyChanged(GuildSagaState saga, GuildChanged msg, ISystemClock clock)
     {
-        saga.Name = name;
+        saga.Name = msg.Name;
+        saga.Roles = msg.Roles;
         saga.LastSyncedAt = clock.UtcNow;
         saga.LastUpdatedAt = clock.UtcNow;
     }

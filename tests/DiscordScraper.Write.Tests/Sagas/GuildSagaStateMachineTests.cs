@@ -176,7 +176,125 @@ public class GuildSagaStateMachineTests
     }
 
     // -------------------------------------------------------------------------
-    // Test 4: GuildSyncConsumer publishes ChannelSyncRequested + GuildChanged
+    // Test 4: GuildChanged with roles → saga.Roles populated
+    // -------------------------------------------------------------------------
+
+    [Test]
+    public async Task GuildChanged_with_roles_populates_saga_roles()
+    {
+        var clock = MakeClock();
+        await using var provider = new ServiceCollection()
+            .AddSingleton(clock)
+            .AddMassTransitTestHarness(cfg =>
+            {
+                cfg.AddSagaStateMachine<GuildSagaStateMachine, GuildSagaState>()
+                    .InMemoryRepository();
+            })
+            .BuildServiceProvider(true);
+
+        var harness = provider.GetTestHarness();
+        await harness.Start();
+
+        const long guildId = 777888999000111222L;
+        var expectedCorrelationId = DeterministicGuid.FromSnowflake(guildId);
+        var sagaHarness = harness.GetSagaStateMachineHarness<GuildSagaStateMachine, GuildSagaState>();
+
+        await harness.Bus.Publish<GuildSyncRequested>(new
+        {
+            GuildId = guildId, CurrentState = "Initial", LastUpdatedAt = FixedNow,
+        });
+        await sagaHarness.Exists(expectedCorrelationId, m => m.Syncing);
+
+        await harness.Bus.Publish<GuildChanged>(new
+        {
+            GuildId = guildId,
+            Name = "Roles Guild",
+            Roles = new List<GuildRole>
+            {
+                new(1001L, "Admin"),
+                new(1002L, "Member"),
+            },
+            CurrentState = "Synced",
+            LastUpdatedAt = FixedNow,
+        });
+
+        await sagaHarness.Exists(expectedCorrelationId, m => m.Synced);
+
+        var saga = sagaHarness.Sagas.Contains(expectedCorrelationId);
+        saga.ShouldNotBeNull();
+        saga.Roles.Count.ShouldBe(2);
+        saga.Roles.ShouldContain(r => r.Id == 1001L && r.Name == "Admin");
+        saga.Roles.ShouldContain(r => r.Id == 1002L && r.Name == "Member");
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 5: Re-publishing GuildChanged with a different role set replaces (not merges) roles
+    // -------------------------------------------------------------------------
+
+    [Test]
+    public async Task GuildChanged_second_publish_replaces_roles_not_merges()
+    {
+        var clock = MakeClock();
+        await using var provider = new ServiceCollection()
+            .AddSingleton(clock)
+            .AddMassTransitTestHarness(cfg =>
+            {
+                cfg.AddSagaStateMachine<GuildSagaStateMachine, GuildSagaState>()
+                    .InMemoryRepository();
+            })
+            .BuildServiceProvider(true);
+
+        var harness = provider.GetTestHarness();
+        await harness.Start();
+
+        const long guildId = 333444555666777888L;
+        var expectedCorrelationId = DeterministicGuid.FromSnowflake(guildId);
+        var sagaHarness = harness.GetSagaStateMachineHarness<GuildSagaStateMachine, GuildSagaState>();
+
+        // First sync cycle — initial roles.
+        await harness.Bus.Publish<GuildSyncRequested>(new
+        {
+            GuildId = guildId, CurrentState = "Initial", LastUpdatedAt = FixedNow,
+        });
+        await sagaHarness.Exists(expectedCorrelationId, m => m.Syncing);
+
+        await harness.Bus.Publish<GuildChanged>(new
+        {
+            GuildId = guildId,
+            Name = "My Guild",
+            Roles = new List<GuildRole> { new(100L, "OldRole") },
+            CurrentState = "Synced",
+            LastUpdatedAt = FixedNow,
+        });
+        await sagaHarness.Exists(expectedCorrelationId, m => m.Synced);
+
+        // Second sync cycle — Discord returns a different authoritative set.
+        await harness.Bus.Publish<GuildSyncRequested>(new
+        {
+            GuildId = guildId, CurrentState = "Synced", LastUpdatedAt = FixedNow,
+        });
+        await sagaHarness.Exists(expectedCorrelationId, m => m.Syncing);
+
+        await harness.Bus.Publish<GuildChanged>(new
+        {
+            GuildId = guildId,
+            Name = "My Guild",
+            Roles = new List<GuildRole> { new(200L, "NewRole"), new(201L, "AnotherRole") },
+            CurrentState = "Synced",
+            LastUpdatedAt = FixedNow,
+        });
+        await sagaHarness.Exists(expectedCorrelationId, m => m.Synced);
+
+        var saga = sagaHarness.Sagas.Contains(expectedCorrelationId);
+        saga.ShouldNotBeNull();
+        saga.Roles.Count.ShouldBe(2, "second GuildChanged replaces — not merges — the role list");
+        saga.Roles.ShouldNotContain(r => r.Id == 100L, "OldRole from first cycle must not survive");
+        saga.Roles.ShouldContain(r => r.Id == 200L && r.Name == "NewRole");
+        saga.Roles.ShouldContain(r => r.Id == 201L && r.Name == "AnotherRole");
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 6 (original 4): GuildSyncConsumer publishes ChannelSyncRequested + GuildChanged
     // -------------------------------------------------------------------------
 
     [Test]

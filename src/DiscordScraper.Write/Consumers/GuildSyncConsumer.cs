@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text.Json;
 using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Contracts.Events.Channel;
 using DiscordScraper.Contracts.Events.Guild;
@@ -62,7 +64,24 @@ internal sealed class GuildSyncConsumer(
                 CurrentState = "Requested",
                 LastUpdatedAt = now,
             }, ct);
+
+            // Publish channel metadata so the read-side read_channels table stays current.
+            // GuildSyncConsumer owns the authoritative channel list; ChannelSyncConsumer only
+            // sees message payloads and has no Name/Type/ParentId context.
+            await context.Publish<ChannelChanged>(new
+            {
+                ChannelId = channel.ChannelId,
+                GuildId = guildId,
+                Name = channel.Name,
+                Topic = (string?)null,
+                ChannelType = channel.Type,
+                ParentId = channel.ParentId,
+                CurrentState = "Active",
+                LastUpdatedAt = now,
+            }, ct);
         }
+
+        var roles = ExtractRoles(guild.Payload, guildId);
 
         // GuildChanged allows GuildSagaStateMachine to transition Syncing → Synced and
         // record the metadata snapshot. Also consumed by read-side GuildReadConsumer (Phase 6).
@@ -70,8 +89,43 @@ internal sealed class GuildSyncConsumer(
         {
             GuildId = guildId,
             Name = guild.Name,
+            Roles = roles,
             CurrentState = "Synced",
             LastUpdatedAt = now,
         }, ct);
+    }
+
+    /// <summary>
+    /// Extracts role id/name pairs from the guild's raw JSON payload.
+    /// Discord always includes roles[] on the full guild object fetched with with_counts=true.
+    /// The @everyone role has id == guildId and is excluded — it is not a mention target.
+    /// </summary>
+    private static IReadOnlyList<GuildRole> ExtractRoles(string guildPayload, long guildId)
+    {
+        using var doc = JsonDocument.Parse(guildPayload);
+        if (!doc.RootElement.TryGetProperty("roles", out var rolesElement) ||
+            rolesElement.ValueKind != JsonValueKind.Array)
+            return [];
+
+        var result = new List<GuildRole>(rolesElement.GetArrayLength());
+        foreach (var role in rolesElement.EnumerateArray())
+        {
+            if (!role.TryGetProperty("id", out var idProp) || idProp.ValueKind != JsonValueKind.String)
+                continue;
+            if (!long.TryParse(idProp.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var roleId))
+                continue;
+
+            // @everyone: Discord sets its id equal to the guild id; skip it.
+            if (roleId == guildId)
+                continue;
+
+            var name = role.TryGetProperty("name", out var nameProp) && nameProp.ValueKind == JsonValueKind.String
+                ? nameProp.GetString() ?? ""
+                : "";
+
+            result.Add(new GuildRole(roleId, name));
+        }
+
+        return result;
     }
 }
