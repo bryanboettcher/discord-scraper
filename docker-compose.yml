@@ -1,6 +1,7 @@
 services:
   postgres:
-    image: postgres:17-alpine
+    # timescaledb-ha bundles both TimescaleDB and pgvector on pg17.
+    image: timescale/timescaledb-ha:pg17
     ports:
       - "5432:5432"
     environment:
@@ -9,19 +10,55 @@ services:
       POSTGRES_PASSWORD: discord
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/init-extensions.sql:/docker-entrypoint-initdb.d/init-extensions.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U discord -d discord_scraper"]
       interval: 5s
       timeout: 3s
       retries: 10
 
-  qdrant:
-    image: qdrant/qdrant:latest
+  mongo:
+    image: mongo:7
+    command: ["--replSet", "rs0", "--bind_ip_all"]
     ports:
-      - "6333:6333"
-      - "6334:6334"
+      - "27017:27017"
     volumes:
-      - qdrantdata:/qdrant/storage
+      - mongodata:/data/db
+    healthcheck:
+      # mongosh exits 0 once the primary is responsive; rs.status() confirms RS is up.
+      test: ["CMD", "mongosh", "--quiet", "--eval", "rs.status().ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+
+  mongo-init:
+    # One-shot container that initiates the replica set, then exits.
+    image: mongo:7
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: >
+      mongosh --host mongo:27017 --quiet --eval
+      "try { rs.status().ok } catch(e) { rs.initiate({_id:'rs0', members:[{_id:0, host:'mongo:27017'}]}) }"
+
+  rabbitmq:
+    build:
+      context: ./docker/rabbitmq
+      dockerfile: Dockerfile
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_running"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
 
   aspire-dashboard:
     image: mcr.microsoft.com/dotnet/aspire-dashboard:9.2
@@ -41,8 +78,10 @@ services:
       Discord__Guilds__0: ${DISCORD_GUILD_ID:-}
       Discord__BackfillSinceUtc: ${DISCORD_BACKFILL_SINCE_UTC:-}
       Postgres__ConnectionString: "Host=postgres;Port=5432;Database=discord_scraper;Username=discord;Password=discord"
-      Qdrant__BaseUrl: "http://qdrant:6333"
-      Qdrant__CollectionName: "discord-messages"
+      Mongo__ConnectionString: "mongodb://mongo:27017/?replicaSet=rs0"
+      RabbitMq__Host: "amqp://rabbitmq:5672"
+      RabbitMq__Username: guest
+      RabbitMq__Password: guest
       Ollama__Embedding__BaseUrl: "http://host.docker.internal:11434"
       Ollama__Embedding__Model: "nomic-embed-text"
       Ollama__Tagging__BaseUrl: "http://host.docker.internal:11434"
@@ -53,8 +92,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      qdrant:
-        condition: service_started
+      mongo:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
       aspire-dashboard:
         condition: service_started
 
@@ -67,17 +108,21 @@ services:
       - "5000:5000"
     environment:
       Postgres__ConnectionString: "Host=postgres;Port=5432;Database=discord_scraper;Username=discord;Password=discord"
-      Qdrant__BaseUrl: "http://qdrant:6333"
-      Qdrant__CollectionName: "discord-messages"
+      Mongo__ConnectionString: "mongodb://mongo:27017/?replicaSet=rs0"
+      RabbitMq__Host: "amqp://rabbitmq:5672"
+      RabbitMq__Username: guest
+      RabbitMq__Password: guest
       OTEL_EXPORTER_OTLP_ENDPOINT: http://aspire-dashboard:18889
     depends_on:
       postgres:
         condition: service_healthy
-      qdrant:
-        condition: service_started
+      mongo:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
       aspire-dashboard:
         condition: service_started
 
 volumes:
   pgdata:
-  qdrantdata:
+  mongodata:

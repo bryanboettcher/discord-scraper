@@ -5,12 +5,20 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="MassTransit" />
+    <PackageReference Include="MassTransit.MongoDb" />
+    <PackageReference Include="MassTransit.RabbitMQ" />
     <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="MongoDB.Driver" />
+    <PackageReference Include="MongoDB.Driver.Core.Extensions.DiagnosticSources" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\DiscordScraper.Ingestion\DiscordScraper.Ingestion.csproj" />
+    <ProjectReference Include="..\DiscordScraper.Discord\DiscordScraper.Discord.csproj" />
+    <ProjectReference Include="..\DiscordScraper.MessageEnhancement\DiscordScraper.MessageEnhancement.csproj" />
     <ProjectReference Include="..\DiscordScraper.ServiceDefaults\DiscordScraper.ServiceDefaults.csproj" />
+    <ProjectReference Include="..\DiscordScraper.Write\DiscordScraper.Write.csproj" />
+    <ProjectReference Include="..\DiscordScraper.Read\DiscordScraper.Read.csproj" />
   </ItemGroup>
 
   <ItemGroup>

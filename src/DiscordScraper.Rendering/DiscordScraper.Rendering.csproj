@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\DiscordScraper.Contracts\DiscordScraper.Contracts.csproj" />
+    <ProjectReference Include="..\DiscordScraper.Core\DiscordScraper.Core.csproj" />
+  </ItemGroup>
+
+</Project>

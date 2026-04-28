@@ -1,0 +1,17 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/DiscordScraper.Contracts/DiscordScraper.Contracts.csproj" />
+    <Project Path="src/DiscordScraper.Core/DiscordScraper.Core.csproj" />
+    <Project Path="src/DiscordScraper.Discord/DiscordScraper.Discord.csproj" />
+    <Project Path="src/DiscordScraper.Rendering/DiscordScraper.Rendering.csproj" />
+    <Project Path="src/DiscordScraper.Write/DiscordScraper.Write.csproj" />
+    <Project Path="src/DiscordScraper.MessageEnhancement/DiscordScraper.MessageEnhancement.csproj" />
+    <Project Path="src/DiscordScraper.Read/DiscordScraper.Read.csproj" />
+    <Project Path="src/DiscordScraper.Ingester/DiscordScraper.Ingester.csproj" />
+    <Project Path="src/DiscordScraper.Api/DiscordScraper.Api.csproj" />
+    <Project Path="src/DiscordScraper.ServiceDefaults/DiscordScraper.ServiceDefaults.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/DiscordScraper.E2E.Tests/DiscordScraper.E2E.Tests.csproj" />
+  </Folder>
+</Solution>

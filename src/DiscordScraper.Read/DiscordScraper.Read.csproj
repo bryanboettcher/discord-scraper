@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <PackageReference Include="EFCore.BulkExtensions" />
+    <PackageReference Include="MassTransit" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
+    <PackageReference Include="Npgsql" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+    <PackageReference Include="Pgvector" />
+    <!-- Mapperly: source generator only — no runtime assembly emitted -->
+    <PackageReference Include="Riok.Mapperly" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DiscordScraper.Contracts\DiscordScraper.Contracts.csproj" />
+    <ProjectReference Include="..\DiscordScraper.Core\DiscordScraper.Core.csproj" />
+    <ProjectReference Include="..\DiscordScraper.Rendering\DiscordScraper.Rendering.csproj" />
+  </ItemGroup>
+
+</Project>

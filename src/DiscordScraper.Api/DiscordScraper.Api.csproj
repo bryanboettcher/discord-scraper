@@ -1,9 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
   <ItemGroup>
-    <ProjectReference Include="..\DiscordScraper.Ingestion\DiscordScraper.Ingestion.csproj" />
+    <ProjectReference Include="..\DiscordScraper.Read\DiscordScraper.Read.csproj" />
     <ProjectReference Include="..\DiscordScraper.ServiceDefaults\DiscordScraper.ServiceDefaults.csproj" />
-    <ProjectReference Include="..\DiscordScraper.Storage\DiscordScraper.Storage.csproj" />
   </ItemGroup>
 
 </Project>

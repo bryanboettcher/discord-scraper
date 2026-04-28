@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Npgsql;
 using OpenTelemetry;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
@@ -62,7 +63,13 @@ public static class ServiceDefaultsExtensions
             {
                 tracing
                     .AddAspNetCoreInstrumentation()
-                    .AddHttpClientInstrumentation();
+                    .AddHttpClientInstrumentation()
+                    // MassTransit built-in ActivitySource (publish, send, consume, saga transitions)
+                    .AddSource("MassTransit")
+                    // Postgres queries via Npgsql (requires Npgsql.OpenTelemetry package)
+                    .AddNpgsql()
+                    // MongoDB operations via MongoDB.Driver.Core.Extensions.DiagnosticSources
+                    .AddSource("MongoDB.Driver.Core.Extensions.DiagnosticSources");
             });
 
         builder.AddOpenTelemetryExporters();
