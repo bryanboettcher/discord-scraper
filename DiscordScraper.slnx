@@ -17,5 +17,6 @@
     <Project Path="tests/DiscordScraper.Write.Tests/DiscordScraper.Write.Tests.csproj" />
     <Project Path="tests/DiscordScraper.MessageEnhancement.Tests/DiscordScraper.MessageEnhancement.Tests.csproj" />
     <Project Path="tests/DiscordScraper.Read.Tests/DiscordScraper.Read.Tests.csproj" />
+    <Project Path="tests/DiscordScraper.Api.Tests/DiscordScraper.Api.Tests.csproj" />
   </Folder>
 </Solution>
