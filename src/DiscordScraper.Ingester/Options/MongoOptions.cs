@@ -1,14 +1,2 @@
-using System.ComponentModel.DataAnnotations;
-
-namespace DiscordScraper.Ingester.Options;
-
-internal sealed class MongoOptions
-{
-    public const string SectionName = "Mongo";
-
-    [Required, MinLength(1)]
-    public string ConnectionString { get; set; } = string.Empty;
-
-    [Required, MinLength(1)]
-    public string DatabaseName { get; set; } = "discord_scraper";
-}
+// Type moved to DiscordScraper.Core.Configuration.MongoOptions.
+// This file intentionally empty — kept to preserve the git path.

@@ -1,5 +1,5 @@
+using DiscordScraper.Core.Configuration;
 using DiscordScraper.Discord.Extensions;
-using DiscordScraper.Ingester.Options;
 using DiscordScraper.Ingester.SmokeTest;
 using DiscordScraper.MessageEnhancement;
 using DiscordScraper.MessageEnhancement.Extensions;

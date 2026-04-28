@@ -6,6 +6,7 @@ public static class WebApplicationExtensions
     {
         MessageEndpoints.MapTo(app);
         ChannelEndpoints.MapTo(app);
+        AdminEndpoints.MapTo(app);
         return app;
     }
 }

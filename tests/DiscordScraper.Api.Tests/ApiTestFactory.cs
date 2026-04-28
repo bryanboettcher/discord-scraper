@@ -1,12 +1,16 @@
+using DiscordScraper.Api.Admin;
+using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Core.Queries;
 using DiscordScraper.Read.Data;
 using DiscordScraper.Read.Vector;
+using MassTransit;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using MongoDB.Driver;
 using Npgsql;
 using NSubstitute;
 
@@ -26,10 +30,28 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
     public IChannelQueryService ChannelQueryService { get; } =
         Substitute.For<IChannelQueryService>();
 
+    public ISagaIntrospection SagaIntrospection { get; } =
+        Substitute.For<ISagaIntrospection>();
+
+    public IReadStoreStatistics ReadStoreStatistics { get; } =
+        Substitute.For<IReadStoreStatistics>();
+
+    public IPublishEndpoint PublishEndpoint { get; } =
+        Substitute.For<IPublishEndpoint>();
+
+    public ISystemClock SystemClock { get; } =
+        Substitute.For<ISystemClock>();
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
-        // Satisfy PostgresOptions ValidateDataAnnotations without a real server.
+        // Satisfy PostgresOptions, MongoOptions, and RabbitMqOptions ValidateDataAnnotations
+        // without a real server.
         builder.UseSetting("Postgres:ConnectionString", "Host=localhost;Database=test;Username=test;Password=test");
+        builder.UseSetting("Mongo:ConnectionString", "mongodb://localhost:27017");
+        builder.UseSetting("Mongo:DatabaseName", "test");
+        builder.UseSetting("RabbitMq:Host", "amqp://localhost");
+        builder.UseSetting("RabbitMq:Username", "guest");
+        builder.UseSetting("RabbitMq:Password", "guest");
 
         builder.ConfigureTestServices(services =>
         {
@@ -41,11 +63,36 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
             services.RemoveAll<NpgsqlDataSource>();
             services.AddSingleton(NpgsqlDataSource.Create("Host=localhost;Database=test;Username=test;Password=test"));
 
+            // Prevent MassTransit from trying to connect to RabbitMQ on startup.
+            services.RemoveAll<IBusControl>();
+            services.RemoveAll<IBus>();
+            services.RemoveAll<IPublishEndpoint>();
+            services.RemoveAll<ISendEndpointProvider>();
+            services.AddSingleton(PublishEndpoint);
+            services.AddSingleton<ISendEndpointProvider>(_ => Substitute.For<ISendEndpointProvider>());
+            services.AddSingleton<IBus>(_ => Substitute.For<IBus>());
+
+            // Prevent Mongo client from attempting real connections.
+            services.RemoveAll<IMongoClient>();
+            services.RemoveAll<IMongoDatabase>();
+            services.AddSingleton<IMongoClient>(_ => Substitute.For<IMongoClient>());
+            services.AddSingleton<IMongoDatabase>(_ => Substitute.For<IMongoDatabase>());
+
+            // Replace clock with controllable substitute.
+            services.RemoveAll<ISystemClock>();
+            services.AddSingleton(SystemClock);
+
             // Replace the real query services with NSubstitute mocks.
             services.RemoveAll<IMessageQueryService>();
             services.RemoveAll<IChannelQueryService>();
             services.AddSingleton(MessageQueryService);
             services.AddSingleton(ChannelQueryService);
+
+            // Replace admin services with mocks.
+            services.RemoveAll<ISagaIntrospection>();
+            services.RemoveAll<IReadStoreStatistics>();
+            services.AddSingleton(SagaIntrospection);
+            services.AddSingleton(ReadStoreStatistics);
         });
     }
 }

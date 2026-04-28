@@ -1,11 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
   <ItemGroup>
+    <PackageReference Include="MassTransit.RabbitMQ" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
+    <PackageReference Include="MongoDB.Driver" />
     <PackageReference Include="Scalar.AspNetCore" />
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\DiscordScraper.Contracts\DiscordScraper.Contracts.csproj" />
     <ProjectReference Include="..\DiscordScraper.Read\DiscordScraper.Read.csproj" />
     <ProjectReference Include="..\DiscordScraper.ServiceDefaults\DiscordScraper.ServiceDefaults.csproj" />
   </ItemGroup>
