@@ -31,6 +31,17 @@ public sealed class GuildSagaState : SagaStateMachineInstance, ISagaVersion, ITi
     public int LastSyncChannelCount { get; set; }
 
     /// <summary>
+    /// False when the bot has been removed from the guild or the guild has been deleted.
+    /// Heartbeat correlation excludes sagas where IsPresent == false so stale-but-inaccessible
+    /// guilds don't re-trigger GuildSyncConsumer indefinitely.
+    ///
+    /// TODO: flip to false automatically when GuildSyncConsumer encounters a Discord 404/403.
+    ///       For v1 the only write path is an explicit admin action. Bot-removal auto-detection
+    ///       is a follow-up — the immediate goal is self-registration via POST /api/admin/sync/guilds/{id}.
+    /// </summary>
+    public bool IsPresent { get; set; } = true;
+
+    /// <summary>
     /// Authoritative role snapshot from the last GuildChanged. Replaced wholesale on each
     /// sync — Discord ships the full list every time. @everyone is excluded before publish.
     /// </summary>

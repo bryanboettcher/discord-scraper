@@ -2,6 +2,7 @@ using DiscordScraper.Contracts;
 using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Contracts.Events.Channel;
 using DiscordScraper.Contracts.Events.Guild;
+using DiscordScraper.Contracts.Events.Sync;
 using DiscordScraper.Discord;
 using DiscordScraper.Discord.Models;
 using DiscordScraper.Write.Consumers;
@@ -366,15 +367,232 @@ public class GuildSagaStateMachineTests
             .Single();
         guildChanged.Context.Message.Name.ShouldBe("FakeGuild");
     }
-}
 
-file static class SubstituteExtensions
-{
-    // Fluent helper so clock setup doesn't need a local variable before Returns.
-    public static T With<T>(this T substitute, Action<T> configure) where T : class
+    // -------------------------------------------------------------------------
+    // Heartbeat tests — verify CorrelateBy fan-out via in-memory repo
+    // MT's InMemorySagaRepository implements IQuerySagaRepository<T>, so the
+    // ExpressionCorrelationSagaQueryFactory-backed CorrelateBy is fully exercised
+    // in the test harness without needing a real Mongo instance.
+    // -------------------------------------------------------------------------
+
+    [Test]
+    public async Task Heartbeat_stale_saga_Synced_transitions_to_Syncing()
     {
-        configure(substitute);
-        return substitute;
+        var clock = MakeClock();
+        await using var provider = new ServiceCollection()
+            .AddSingleton(clock)
+            .AddMassTransitTestHarness(cfg =>
+            {
+                cfg.AddSagaStateMachine<GuildSagaStateMachine, GuildSagaState>()
+                    .InMemoryRepository();
+            })
+            .BuildServiceProvider(true);
+
+        var harness = provider.GetTestHarness();
+        await harness.Start();
+
+        const long guildId = 500000000000000001L;
+        var correlationId = DeterministicGuid.FromSnowflake(guildId);
+        var sagaHarness = harness.GetSagaStateMachineHarness<GuildSagaStateMachine, GuildSagaState>();
+
+        // Bootstrap: SyncRequested → Syncing, then GuildChanged → Synced.
+        await harness.Bus.Publish<GuildSyncRequested>(new
+        {
+            GuildId = guildId, CurrentState = "Initial", LastUpdatedAt = FixedNow,
+        });
+        await sagaHarness.Exists(correlationId, m => m.Syncing);
+
+        await harness.Bus.Publish<GuildChanged>(new
+        {
+            GuildId = guildId, Name = "Heartbeat Guild", CurrentState = "Synced", LastUpdatedAt = FixedNow,
+        });
+        await sagaHarness.Exists(correlationId, m => m.Synced);
+
+        // Heartbeat: StaleAfter is after LastSyncedAt (FixedNow) — saga should match and re-enter Syncing.
+        var heartbeatTime = FixedNow.AddMinutes(10);
+        await harness.Bus.Publish<SyncHeartbeat>(new
+        {
+            Timestamp = heartbeatTime,
+            StaleAfter = heartbeatTime.AddMinutes(-5), // StaleAfter > FixedNow (LastSyncedAt)
+        });
+
+        var sagaId = await sagaHarness.Exists(correlationId, m => m.Syncing);
+        sagaId.ShouldNotBeNull("Stale Synced saga did not re-enter Syncing on heartbeat");
+    }
+
+    [Test]
+    public async Task Heartbeat_fresh_saga_stays_Synced()
+    {
+        var clock = MakeClock();
+        await using var provider = new ServiceCollection()
+            .AddSingleton(clock)
+            .AddMassTransitTestHarness(cfg =>
+            {
+                cfg.AddSagaStateMachine<GuildSagaStateMachine, GuildSagaState>()
+                    .InMemoryRepository();
+            })
+            .BuildServiceProvider(true);
+
+        var harness = provider.GetTestHarness();
+        await harness.Start();
+
+        const long guildId = 500000000000000002L;
+        var correlationId = DeterministicGuid.FromSnowflake(guildId);
+        var sagaHarness = harness.GetSagaStateMachineHarness<GuildSagaStateMachine, GuildSagaState>();
+
+        // Bootstrap into Synced — LastSyncedAt will be FixedNow.
+        await harness.Bus.Publish<GuildSyncRequested>(new
+        {
+            GuildId = guildId, CurrentState = "Initial", LastUpdatedAt = FixedNow,
+        });
+        await sagaHarness.Exists(correlationId, m => m.Syncing);
+
+        await harness.Bus.Publish<GuildChanged>(new
+        {
+            GuildId = guildId, Name = "Fresh Guild", CurrentState = "Synced", LastUpdatedAt = FixedNow,
+        });
+        await sagaHarness.Exists(correlationId, m => m.Synced);
+
+        // Heartbeat: StaleAfter is before LastSyncedAt — saga is fresh and must NOT match.
+        var heartbeatTime = FixedNow.AddMinutes(10);
+        await harness.Bus.Publish<SyncHeartbeat>(new
+        {
+            Timestamp = heartbeatTime,
+            StaleAfter = FixedNow.AddMinutes(-5), // StaleAfter < FixedNow (LastSyncedAt)
+        });
+
+        // Give the harness a moment to process — no state change expected.
+        await Task.Delay(200);
+
+        var saga = sagaHarness.Sagas.Contains(correlationId);
+        saga.ShouldNotBeNull();
+        saga.CurrentState.ShouldBe("Synced", "Fresh saga must not be picked up by heartbeat with future StaleAfter cutoff");
+    }
+
+    [Test]
+    public async Task Heartbeat_while_Syncing_is_ignored()
+    {
+        var clock = MakeClock();
+        await using var provider = new ServiceCollection()
+            .AddSingleton(clock)
+            .AddMassTransitTestHarness(cfg =>
+            {
+                cfg.AddSagaStateMachine<GuildSagaStateMachine, GuildSagaState>()
+                    .InMemoryRepository();
+            })
+            .BuildServiceProvider(true);
+
+        var harness = provider.GetTestHarness();
+        await harness.Start();
+
+        const long guildId = 500000000000000003L;
+        var correlationId = DeterministicGuid.FromSnowflake(guildId);
+        var sagaHarness = harness.GetSagaStateMachineHarness<GuildSagaStateMachine, GuildSagaState>();
+
+        // Bootstrap into Syncing — don't publish GuildChanged so it stays Syncing.
+        await harness.Bus.Publish<GuildSyncRequested>(new
+        {
+            GuildId = guildId, CurrentState = "Initial", LastUpdatedAt = FixedNow,
+        });
+        await sagaHarness.Exists(correlationId, m => m.Syncing);
+
+        // Heartbeat arrives while in Syncing — CorrelateBy excludes CurrentState == "Syncing"
+        // so this heartbeat should not match the saga at all (Discard on missing).
+        var heartbeatTime = FixedNow.AddMinutes(10);
+        await harness.Bus.Publish<SyncHeartbeat>(new
+        {
+            Timestamp = heartbeatTime,
+            StaleAfter = heartbeatTime.AddMinutes(-5),
+        });
+
+        await Task.Delay(200);
+
+        var saga = sagaHarness.Sagas.Contains(correlationId);
+        saga.ShouldNotBeNull();
+        saga.CurrentState.ShouldBe("Syncing", "Saga in Syncing must be excluded by CorrelateBy filter");
+    }
+
+    [Test]
+    public async Task Heartbeat_IsPresent_false_is_not_matched()
+    {
+        var clock = MakeClock();
+        await using var provider = new ServiceCollection()
+            .AddSingleton(clock)
+            .AddMassTransitTestHarness(cfg =>
+            {
+                cfg.AddSagaStateMachine<GuildSagaStateMachine, GuildSagaState>()
+                    .InMemoryRepository();
+            })
+            .BuildServiceProvider(true);
+
+        var harness = provider.GetTestHarness();
+        await harness.Start();
+
+        const long guildId = 500000000000000004L;
+        var correlationId = DeterministicGuid.FromSnowflake(guildId);
+        var sagaHarness = harness.GetSagaStateMachineHarness<GuildSagaStateMachine, GuildSagaState>();
+
+        // Bootstrap into Synced.
+        await harness.Bus.Publish<GuildSyncRequested>(new
+        {
+            GuildId = guildId, CurrentState = "Initial", LastUpdatedAt = FixedNow,
+        });
+        await sagaHarness.Exists(correlationId, m => m.Syncing);
+
+        await harness.Bus.Publish<GuildChanged>(new
+        {
+            GuildId = guildId, Name = "Absent Guild", CurrentState = "Synced", LastUpdatedAt = FixedNow,
+        });
+        await sagaHarness.Exists(correlationId, m => m.Synced);
+
+        // Simulate IsPresent being flipped to false (e.g. via admin action).
+        var saga = sagaHarness.Sagas.Contains(correlationId);
+        saga.ShouldNotBeNull();
+        saga.IsPresent = false;
+
+        // Heartbeat would normally match (stale cutoff after LastSyncedAt) but IsPresent blocks it.
+        var heartbeatTime = FixedNow.AddMinutes(10);
+        await harness.Bus.Publish<SyncHeartbeat>(new
+        {
+            Timestamp = heartbeatTime,
+            StaleAfter = heartbeatTime.AddMinutes(-5),
+        });
+
+        await Task.Delay(200);
+
+        saga = sagaHarness.Sagas.Contains(correlationId);
+        saga.ShouldNotBeNull();
+        saga.CurrentState.ShouldBe("Synced", "Saga with IsPresent=false must not be picked up by heartbeat");
+    }
+
+    [Test]
+    public async Task New_saga_IsPresent_defaults_to_true()
+    {
+        var clock = MakeClock();
+        await using var provider = new ServiceCollection()
+            .AddSingleton(clock)
+            .AddMassTransitTestHarness(cfg =>
+            {
+                cfg.AddSagaStateMachine<GuildSagaStateMachine, GuildSagaState>()
+                    .InMemoryRepository();
+            })
+            .BuildServiceProvider(true);
+
+        var harness = provider.GetTestHarness();
+        await harness.Start();
+
+        const long guildId = 500000000000000005L;
+        var correlationId = DeterministicGuid.FromSnowflake(guildId);
+        var sagaHarness = harness.GetSagaStateMachineHarness<GuildSagaStateMachine, GuildSagaState>();
+
+        await harness.Bus.Publish<GuildSyncRequested>(new
+        {
+            GuildId = guildId, CurrentState = "Initial", LastUpdatedAt = FixedNow,
+        });
+        await sagaHarness.Exists(correlationId, m => m.Syncing);
+
+        var saga = sagaHarness.Sagas.Contains(correlationId);
+        saga.ShouldNotBeNull();
+        saga.IsPresent.ShouldBeTrue("Newly registered saga must default to IsPresent = true");
     }
 }
-

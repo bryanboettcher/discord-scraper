@@ -14,13 +14,6 @@ public sealed class DiscordOptions
     public string BotToken { get; set; } = string.Empty;
 
     /// <summary>
-    /// Snowflake IDs of guilds to ingest. The bot must already be a member of
-    /// each listed guild. An empty list disables ingestion.
-    /// </summary>
-    [Required, MinLength(1)]
-    public List<string> Guilds { get; set; } = [];
-
-    /// <summary>
     /// Messages per page on the <c>GET /channels/{id}/messages</c> endpoint.
     /// Discord caps this at 100.
     /// </summary>

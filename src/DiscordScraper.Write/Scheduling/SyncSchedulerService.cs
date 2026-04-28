@@ -1,4 +1,5 @@
-using DiscordScraper.Contracts.Events.Guild;
+using DiscordScraper.Contracts.Clock;
+using DiscordScraper.Contracts.Events.Sync;
 using DiscordScraper.Discord.Options;
 using MassTransit;
 using Microsoft.Extensions.DependencyInjection;
@@ -11,6 +12,7 @@ namespace DiscordScraper.Write.Scheduling;
 internal sealed class SyncSchedulerService(
     IServiceScopeFactory scopeFactory,
     IOptions<DiscordOptions> options,
+    ISystemClock clock,
     ILogger<SyncSchedulerService> logger) : BackgroundService
 {
     // Lets the MT bus finish topology setup before the first publish.
@@ -33,26 +35,21 @@ internal sealed class SyncSchedulerService(
     // Internal so tests can exercise per-tick logic without fighting PeriodicTimer.
     internal async Task PublishOnceAsync(CancellationToken ct)
     {
-        var guilds = options.Value.Guilds;
-
-        logger.LogInformation("Sync tick: scheduling {GuildCount} guild(s)", guilds.Count);
-
         await using var scope = scopeFactory.CreateAsyncScope();
         var publish = scope.ServiceProvider.GetRequiredService<IPublishEndpoint>();
 
-        foreach (var rawId in guilds)
+        var now = clock.UtcNow;
+        var staleAfter = now - options.Value.SyncInterval;
+
+        await publish.Publish<SyncHeartbeat>(new
         {
-            if (!long.TryParse(rawId, out var guildId))
-            {
-                logger.LogError("Configured guild ID {RawId} is not a valid snowflake; skipping", rawId);
-                continue;
-            }
+            Timestamp = now,
+            StaleAfter = staleAfter,
+        }, ct);
 
-            await publish.Publish<GuildSyncRequested>(
-                new { GuildId = guildId, CurrentState = "Syncing" },
-                ct);
-
-            logger.LogDebug("Published GuildSyncRequested for guild {GuildId}", guildId);
-        }
+        logger.LogDebug(
+            "SyncHeartbeat published at {Timestamp}, StaleAfter {StaleAfter}",
+            now,
+            staleAfter);
     }
 }

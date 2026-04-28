@@ -75,7 +75,6 @@ services:
       target: ingester
     environment:
       Discord__BotToken: ${DISCORD_BOT_TOKEN:-}
-      Discord__Guilds__0: ${DISCORD_GUILD_ID:-}
       Discord__BackfillSinceUtc: ${DISCORD_BACKFILL_SINCE_UTC:-}
       Postgres__ConnectionString: "Host=postgres;Port=5432;Database=discord_scraper;Username=discord;Password=discord"
       Mongo__ConnectionString: "mongodb://mongo:27017/?replicaSet=rs0"

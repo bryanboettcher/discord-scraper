@@ -8,3 +8,7 @@ obj/
 .env
 .env.*
 !.env.example
+*.swp
+*.swo
+..*.swp
+..*.swo
