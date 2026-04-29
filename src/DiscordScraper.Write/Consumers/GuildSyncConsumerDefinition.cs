@@ -7,7 +7,7 @@ namespace DiscordScraper.Write.Consumers;
 /// process well below the global bot limit (50 req/s). Outbox makes the ChannelSyncRequested
 /// publishes atomic with the consume ack.
 /// </summary>
-internal sealed class GuildSyncConsumerDefinition : ConsumerDefinition<GuildSyncConsumer>
+public sealed class GuildSyncConsumerDefinition : ConsumerDefinition<GuildSyncConsumer>
 {
     protected override void ConfigureConsumer(
         IReceiveEndpointConfigurator endpointConfigurator,

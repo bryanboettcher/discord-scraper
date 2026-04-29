@@ -42,11 +42,12 @@ internal sealed class ReadMessageConfiguration : IEntityTypeConfiguration<ReadMe
                 ir => JsonSerializer.Serialize(ir, SerializerOptions),
                 json => JsonSerializer.Deserialize<MessageIR>(json, SerializerOptions)!));
 
-        // Tsv is a GENERATED ALWAYS AS column — the DB writes it; EF never sends it on INSERT/UPDATE.
-        b.Property(e => e.Tsv)
-            .HasColumnName("tsv")
-            .HasColumnType("tsvector")
-            .HasComputedColumnSql("to_tsvector('english', plain_text)", stored: true);
+        // Tsv is a GENERATED ALWAYS AS column with type 'tsvector' — Npgsql's EF Core provider
+        // doesn't have a built-in mapping for tsvector to string. Ignore the property in EF;
+        // ReadSchemaInitializer creates the column + GIN index via raw DDL, and PgSearchService
+        // queries it directly through Npgsql (also bypassing EF). The CLR property exists on the
+        // entity for completeness but is never read or written by the DbContext.
+        b.Ignore(e => e.Tsv);
 
         // Btree indexes mirroring the DDL in the architecture plan.
         b.HasIndex(e => e.MessageId)
@@ -59,9 +60,6 @@ internal sealed class ReadMessageConfiguration : IEntityTypeConfiguration<ReadMe
         b.HasIndex(e => e.AuthorId)
             .HasDatabaseName("read_messages_author_idx");
 
-        // GIN index on the generated tsvector column.
-        b.HasIndex(e => e.Tsv)
-            .HasMethod("gin")
-            .HasDatabaseName("read_messages_tsv_idx");
+        // GIN index on tsv lives in raw DDL (ReadSchemaInitializer) since Tsv is Ignore'd.
     }
 }

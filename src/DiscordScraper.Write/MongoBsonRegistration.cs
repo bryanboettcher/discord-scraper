@@ -1,4 +1,5 @@
 using DiscordScraper.Contracts.IR;
+using DiscordScraper.Write.Sagas;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Bson.Serialization.Conventions;
@@ -35,11 +36,40 @@ public static class MongoBsonRegistration
         {
             if (_registered) return;
 
+            // MongoDB.Driver 3.x removed the implicit GuidRepresentation default. Without an
+            // explicit registration, every Guid serialization throws "Unspecified". Standard
+            // is the canonical .NET-friendly subtype for new applications.
+            BsonSerializer.TryRegisterSerializer(new GuidSerializer(GuidRepresentation.Standard));
+
+            RegisterSagaStates();
             RegisterMessageNodeHierarchy();
             RegisterMessageIrTypes();
 
             _registered = true;
         }
+    }
+
+    private static void RegisterSagaStates()
+    {
+        // MT's Mongo saga repository writes CorrelationId as the document's `_id`. On deserialize,
+        // BSON would otherwise complain about an unmapped `_id` element because AutoMap binds
+        // CorrelationId to a "CorrelationId" field. Explicit MapIdMember tells the driver to bind
+        // CorrelationId to `_id` on both directions.
+        BsonClassMap.TryRegisterClassMap<GuildSagaState>(cm =>
+        {
+            cm.AutoMap();
+            cm.MapIdMember(s => s.CorrelationId);
+        });
+        BsonClassMap.TryRegisterClassMap<ChannelSagaState>(cm =>
+        {
+            cm.AutoMap();
+            cm.MapIdMember(s => s.CorrelationId);
+        });
+        BsonClassMap.TryRegisterClassMap<MessageSagaState>(cm =>
+        {
+            cm.AutoMap();
+            cm.MapIdMember(s => s.CorrelationId);
+        });
     }
 
     private static void RegisterMessageNodeHierarchy()

@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 
 namespace DiscordScraper.Read.Consumers;
 
-internal sealed class ChannelReadConsumer(
+public sealed class ChannelReadConsumer(
     IDbContextFactory<ReadDbContext> factory,
     IReadBulkWriter writer,
     ILogger<ChannelReadConsumer> logger)

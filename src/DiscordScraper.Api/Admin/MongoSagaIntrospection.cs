@@ -94,9 +94,11 @@ internal sealed class MongoSagaIntrospection(IMongoDatabase db) : ISagaIntrospec
         var cursor = await collection.AggregateAsync<BsonDocument>(pipeline, cancellationToken: ct);
         var docs = await cursor.ToListAsync(ct);
 
+        // Mongo $sum returns Int32 for small counts and Int64 only when the running total
+        // exceeds int.MaxValue. ToInt64() handles both representations.
         return docs.ToDictionary(
             d => d["_id"].AsString,
-            d => d["count"].AsInt64);
+            d => d["count"].ToInt64());
     }
 
     private static GuildSagaSnapshot MapGuildSnapshot(BsonDocument d) => new(

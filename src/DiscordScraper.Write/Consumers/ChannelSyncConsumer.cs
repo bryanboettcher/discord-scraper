@@ -20,7 +20,7 @@ namespace DiscordScraper.Write.Consumers;
 /// Per-channel ordering: the consumer definition uses a Partitioner keyed on ChannelId combined
 /// with ConcurrentMessageLimit=1 so syncs for the same channel run serially.
 /// </remarks>
-internal sealed class ChannelSyncConsumer(
+public sealed class ChannelSyncConsumer(
     IDiscordClient discord,
     ISystemClock clock,
     ILogger<ChannelSyncConsumer> logger) : IConsumer<ChannelSyncRequested>

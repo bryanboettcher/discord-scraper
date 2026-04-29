@@ -1,6 +1,6 @@
+using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Core.Configuration;
 using DiscordScraper.Discord.Extensions;
-using DiscordScraper.Ingester.SmokeTest;
 using DiscordScraper.MessageEnhancement;
 using DiscordScraper.MessageEnhancement.Extensions;
 using DiscordScraper.Read;
@@ -40,6 +40,9 @@ builder.Services.AddOptions<PostgresOptions>()
     .ValidateDataAnnotations()
     .ValidateOnStart();
 
+// ISystemClock is consumed by sagas, scheduler, consumers — register once at the host root.
+builder.Services.AddSingleton<ISystemClock, SystemClock>();
+
 // --- MongoDB client + database ---
 // MongoClientSettings configures the DiagnosticSources activity propagation
 // so MongoDB operations appear in the OTel trace.
@@ -71,7 +74,6 @@ var mongoOptions = builder.Configuration.GetSection(MongoOptions.SectionName).Ge
 builder.Services.AddMassTransit(x =>
 {
     x.AddWriteSagasAndConsumers(mongoOptions.ConnectionString, mongoOptions.DatabaseName);
-    x.AddConsumers(typeof(Program).Assembly);
     x.AddConsumers(typeof(MessageEnhancementAssemblyMarker).Assembly);
     x.AddConsumers(typeof(ReadAssemblyMarker).Assembly);
 
@@ -105,12 +107,8 @@ builder.Services.AddReadModels();
 builder.Services.AddReadGraph();
 builder.Services.AddReadQueries();
 
-// Periodically publishes GuildSyncRequested for each configured Discord guild.
+// Periodically publishes SyncHeartbeat; GuildSagaStateMachine fans out to stale guild sagas via CorrelateBy.
 builder.Services.AddSyncScheduler();
-
-// Boot-time smoke test: proves bus, RabbitMQ, Mongo outbox, and a consumer all round-trip.
-builder.Services.AddSingleton<BusSmokeTestCompletionSource>();
-builder.Services.AddHostedService<BusSmokeTestService>();
 
 var host = builder.Build();
 host.Run();

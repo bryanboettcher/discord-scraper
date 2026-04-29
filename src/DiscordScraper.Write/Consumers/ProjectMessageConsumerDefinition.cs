@@ -6,7 +6,7 @@ namespace DiscordScraper.Write.Consumers;
 /// Two immediate retries handle transient Mongo blips; the saga handles ProjectMessage.Faulted
 /// for non-transient failures.
 /// </summary>
-internal sealed class ProjectMessageConsumerDefinition : ConsumerDefinition<ProjectMessageConsumer>
+public sealed class ProjectMessageConsumerDefinition : ConsumerDefinition<ProjectMessageConsumer>
 {
     protected override void ConfigureConsumer(
         IReceiveEndpointConfigurator endpointConfigurator,

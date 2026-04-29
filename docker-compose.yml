@@ -25,15 +25,19 @@ services:
     volumes:
       - mongodata:/data/db
     healthcheck:
-      # mongosh exits 0 once the primary is responsive; rs.status() confirms RS is up.
-      test: ["CMD", "mongosh", "--quiet", "--eval", "rs.status().ok"]
+      # Basic connectivity check — `db.runCommand({ping:1}).ok` returns 1 once mongod accepts
+      # connections, even before rs.initiate() runs. The replica set itself is initialized by
+      # the mongo-init container; downstream services depend on mongo-init's successful
+      # completion (service_completed_successfully) rather than mongo's healthy state.
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ping:1}).ok"]
       interval: 5s
       timeout: 5s
       retries: 20
-      start_period: 15s
+      start_period: 10s
 
   mongo-init:
-    # One-shot container that initiates the replica set, then exits.
+    # One-shot container that initiates the replica set, then exits. Idempotent — re-runs
+    # against an initialized RS are no-ops because rs.status() succeeds.
     image: mongo:7
     depends_on:
       mongo:
@@ -91,8 +95,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      mongo:
-        condition: service_healthy
+      mongo-init:
+        condition: service_completed_successfully
       rabbitmq:
         condition: service_healthy
       aspire-dashboard:
@@ -115,8 +119,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      mongo:
-        condition: service_healthy
+      mongo-init:
+        condition: service_completed_successfully
       rabbitmq:
         condition: service_healthy
       aspire-dashboard:

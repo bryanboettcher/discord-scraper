@@ -18,7 +18,7 @@ namespace DiscordScraper.Read.Consumers;
 /// Indexed) and the Excluded terminal carry incomplete data and are silently skipped — projecting
 /// them would expose partial reads and churn upserts.
 /// </remarks>
-internal sealed class MessageReadConsumer(
+public sealed class MessageReadConsumer(
     IDbContextFactory<ReadDbContext> factory,
     IReadBulkWriter writer,
     ILogger<MessageReadConsumer> logger)

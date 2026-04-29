@@ -7,7 +7,7 @@ namespace DiscordScraper.Write.Consumers;
 /// applied per-endpoint per-process. Divide by pod count when scaling out. UseMongoDbOutbox
 /// makes publishes inside Consume() transactional even though PinPollConsumer is stateless.
 /// </summary>
-internal sealed class PinPollConsumerDefinition : ConsumerDefinition<PinPollConsumer>
+public sealed class PinPollConsumerDefinition : ConsumerDefinition<PinPollConsumer>
 {
     protected override void ConfigureConsumer(
         IReceiveEndpointConfigurator endpointConfigurator,

@@ -56,6 +56,10 @@ public static class ReadServiceCollectionExtensions
         services.AddHostedService<ReadSchemaInitializer>();
         services.AddSingleton<ISearchService, PgSearchService>();
 
+        // EFCore.BulkExtensions adapter — used by the ReadModelBatchConsumer base class
+        // for batch upserts into the read tables.
+        services.AddSingleton<Consumers.IReadBulkWriter, Consumers.EfCoreBulkWriter>();
+
         return services;
     }
 

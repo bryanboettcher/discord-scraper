@@ -2,5 +2,5 @@ using DiscordScraper.Contracts.Events.Guild;
 
 namespace DiscordScraper.Read.Consumers;
 
-internal sealed class GuildReadConsumerDefinition
+public sealed class GuildReadConsumerDefinition
     : ReadModelBatchConsumerDefinition<GuildReadConsumer, GuildChanged>;

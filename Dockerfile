@@ -2,36 +2,37 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
 # Copy project files first for layer caching
-COPY src/DiscordScraper.Core/DiscordScraper.Core.csproj src/DiscordScraper.Core/
-COPY src/DiscordScraper.Discord/DiscordScraper.Discord.csproj src/DiscordScraper.Discord/
-COPY src/DiscordScraper.Storage/DiscordScraper.Storage.csproj src/DiscordScraper.Storage/
-COPY src/DiscordScraper.Ingestion/DiscordScraper.Ingestion.csproj src/DiscordScraper.Ingestion/
-COPY src/DiscordScraper.ServiceDefaults/DiscordScraper.ServiceDefaults.csproj src/DiscordScraper.ServiceDefaults/
-COPY src/DiscordScraper.Ingester/DiscordScraper.Ingester.csproj src/DiscordScraper.Ingester/
-COPY src/DiscordScraper.Api/DiscordScraper.Api.csproj src/DiscordScraper.Api/
-COPY src/DiscordScraper.Cli/DiscordScraper.Cli.csproj src/DiscordScraper.Cli/
-COPY tests/DiscordScraper.Discord.Tests/DiscordScraper.Discord.Tests.csproj tests/DiscordScraper.Discord.Tests/
-COPY tests/DiscordScraper.Storage.Tests/DiscordScraper.Storage.Tests.csproj tests/DiscordScraper.Storage.Tests/
-COPY tests/DiscordScraper.Ingestion.Tests/DiscordScraper.Ingestion.Tests.csproj tests/DiscordScraper.Ingestion.Tests/
-COPY tests/DiscordScraper.Ingester.Tests/DiscordScraper.Ingester.Tests.csproj tests/DiscordScraper.Ingester.Tests/
+COPY Directory.Build.props ./
+COPY Directory.Packages.props ./
+COPY DiscordScraper.slnx ./
 
-RUN dotnet restore src/DiscordScraper.Api/DiscordScraper.Api.csproj
-RUN dotnet restore src/DiscordScraper.Ingester/DiscordScraper.Ingester.csproj
-RUN dotnet restore src/DiscordScraper.Cli/DiscordScraper.Cli.csproj
-RUN dotnet restore tests/DiscordScraper.Discord.Tests/DiscordScraper.Discord.Tests.csproj
-RUN dotnet restore tests/DiscordScraper.Storage.Tests/DiscordScraper.Storage.Tests.csproj
-RUN dotnet restore tests/DiscordScraper.Ingestion.Tests/DiscordScraper.Ingestion.Tests.csproj
-RUN dotnet restore tests/DiscordScraper.Ingester.Tests/DiscordScraper.Ingester.Tests.csproj
+COPY src/DiscordScraper.Contracts/DiscordScraper.Contracts.csproj         src/DiscordScraper.Contracts/
+COPY src/DiscordScraper.Core/DiscordScraper.Core.csproj                   src/DiscordScraper.Core/
+COPY src/DiscordScraper.Discord/DiscordScraper.Discord.csproj             src/DiscordScraper.Discord/
+COPY src/DiscordScraper.Rendering/DiscordScraper.Rendering.csproj         src/DiscordScraper.Rendering/
+COPY src/DiscordScraper.Write/DiscordScraper.Write.csproj                 src/DiscordScraper.Write/
+COPY src/DiscordScraper.MessageEnhancement/DiscordScraper.MessageEnhancement.csproj src/DiscordScraper.MessageEnhancement/
+COPY src/DiscordScraper.Read/DiscordScraper.Read.csproj                   src/DiscordScraper.Read/
+COPY src/DiscordScraper.ServiceDefaults/DiscordScraper.ServiceDefaults.csproj src/DiscordScraper.ServiceDefaults/
+COPY src/DiscordScraper.Ingester/DiscordScraper.Ingester.csproj           src/DiscordScraper.Ingester/
+COPY src/DiscordScraper.Api/DiscordScraper.Api.csproj                     src/DiscordScraper.Api/
+
+COPY tests/DiscordScraper.Contracts.Tests/DiscordScraper.Contracts.Tests.csproj                 tests/DiscordScraper.Contracts.Tests/
+COPY tests/DiscordScraper.Rendering.Tests/DiscordScraper.Rendering.Tests.csproj                 tests/DiscordScraper.Rendering.Tests/
+COPY tests/DiscordScraper.Write.Tests/DiscordScraper.Write.Tests.csproj                         tests/DiscordScraper.Write.Tests/
+COPY tests/DiscordScraper.MessageEnhancement.Tests/DiscordScraper.MessageEnhancement.Tests.csproj tests/DiscordScraper.MessageEnhancement.Tests/
+COPY tests/DiscordScraper.Read.Tests/DiscordScraper.Read.Tests.csproj                           tests/DiscordScraper.Read.Tests/
+COPY tests/DiscordScraper.Api.Tests/DiscordScraper.Api.Tests.csproj                             tests/DiscordScraper.Api.Tests/
+
+# Single restore via the solution file pulls everything.
+RUN dotnet restore DiscordScraper.slnx
 
 # Copy remaining source
 COPY src/ src/
 COPY tests/ tests/
 
-# Tests run during build — failure fails the image
-RUN dotnet test tests/DiscordScraper.Discord.Tests/    --no-restore --verbosity quiet
-RUN dotnet test tests/DiscordScraper.Storage.Tests/    --no-restore --verbosity quiet
-RUN dotnet test tests/DiscordScraper.Ingestion.Tests/  --no-restore --verbosity quiet
-RUN dotnet test tests/DiscordScraper.Ingester.Tests/   --no-restore --verbosity quiet
+# Tests run during build — failure fails the image. Solution-file run picks up all 6 test projects.
+RUN dotnet test DiscordScraper.slnx --no-restore --verbosity quiet
 
 # Publish both runnable hosts to distinct output dirs
 RUN dotnet publish src/DiscordScraper.Api      -c Release -o /app/api      --no-restore
@@ -46,7 +47,9 @@ EXPOSE 5000
 ENTRYPOINT ["dotnet", "DiscordScraper.Api.dll"]
 
 
-FROM mcr.microsoft.com/dotnet/runtime:10.0 AS ingester
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS ingester
+# ASP.NET Core runtime — Ingester transitively pulls AspNetCore via ServiceDefaults
+# (OpenTelemetry.Instrumentation.AspNetCore, Microsoft.Extensions.Http.Resilience).
 WORKDIR /app
 COPY --from=build /app/ingester .
 ENTRYPOINT ["dotnet", "DiscordScraper.Ingester.dll"]

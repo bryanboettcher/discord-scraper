@@ -20,7 +20,7 @@ namespace DiscordScraper.Write.Consumers;
 /// Retry: 2 attempts with 2s interval handles transient Discord 5xx. Longer faults (429, 403) flow
 /// to dead-letter for operator inspection rather than retrying indefinitely.
 /// </remarks>
-internal sealed class ChannelSyncConsumerDefinition : ConsumerDefinition<ChannelSyncConsumer>
+public sealed class ChannelSyncConsumerDefinition : ConsumerDefinition<ChannelSyncConsumer>
 {
     public ChannelSyncConsumerDefinition()
     {

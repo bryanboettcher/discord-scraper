@@ -15,7 +15,7 @@ namespace DiscordScraper.Write.Consumers;
 /// <see cref="MongoGuildRoleNameRepo"/> always returns an empty map and role mentions render as
 /// "&lt;unknown role&gt;".
 /// </remarks>
-internal sealed class ProjectMessageConsumer(
+public sealed class ProjectMessageConsumer(
     IMessageParser parser,
     IChannelNameRepo channels,
     IGuildRoleNameRepo guildRoles,

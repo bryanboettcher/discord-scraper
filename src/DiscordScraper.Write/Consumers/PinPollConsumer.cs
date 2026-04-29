@@ -25,7 +25,7 @@ namespace DiscordScraper.Write.Consumers;
 /// acceptable because re-projection of an unchanged IR is idempotent.  A future optimization
 /// can track per-message edit timestamps in ChannelSagaState to suppress duplicates.
 /// </summary>
-internal sealed class PinPollConsumer(
+public sealed class PinPollConsumer(
     IDiscordClient discord,
     ISystemClock clock,
     ILogger<PinPollConsumer> logger) : IConsumer<PinPollDue>

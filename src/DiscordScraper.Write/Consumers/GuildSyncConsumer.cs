@@ -18,7 +18,7 @@ namespace DiscordScraper.Write.Consumers;
 /// this consumer does the I/O. Using pub/sub (not request/response) because there is
 /// nothing to respond to — fan-out is the shape of this step.
 /// </summary>
-internal sealed class GuildSyncConsumer(
+public sealed class GuildSyncConsumer(
     IDiscordClient discord,
     IChannelCursorRepo cursorRepo,
     ISystemClock clock,
