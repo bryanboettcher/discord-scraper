@@ -68,12 +68,9 @@ builder.Services.AddMessageEnhancementClients();
 builder.Services.AddReadVectorStore();
 
 // --- MassTransit ---
-var mongoOptions = builder.Configuration.GetSection(MongoOptions.SectionName).Get<MongoOptions>()
-    ?? throw new InvalidOperationException("Mongo configuration section is missing.");
-
 builder.Services.AddMassTransit(x =>
 {
-    x.AddWriteSagasAndConsumers(mongoOptions.ConnectionString, mongoOptions.DatabaseName);
+    x.AddWriteSagasAndConsumers();
     x.AddConsumers(typeof(MessageEnhancementAssemblyMarker).Assembly);
     x.AddConsumers(typeof(ReadAssemblyMarker).Assembly);
 

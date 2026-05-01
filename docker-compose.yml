@@ -24,6 +24,14 @@ services:
       - "27017:27017"
     volumes:
       - mongodata:/data/db
+    # Docker's default soft nofile is 1024; mongod's listener exhausts that under
+    # legitimate load (driver pool + monitoring + WiredTiger data files + listener
+    # sockets) and WiredTiger fasserts on accept(). 64000 is MongoDB's own
+    # recommendation in production deployments.
+    ulimits:
+      nofile:
+        soft: 64000
+        hard: 64000
     healthcheck:
       # Basic connectivity check — `db.runCommand({ping:1}).ok` returns 1 once mongod accepts
       # connections, even before rs.initiate() runs. The replica set itself is initialized by

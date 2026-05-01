@@ -33,23 +33,39 @@ internal sealed class SyncSchedulerService(
     }
 
     // Internal so tests can exercise per-tick logic without fighting PeriodicTimer.
+    //
+    // Failure semantics: a thrown exception propagates out, the BackgroundService faults, and the
+    // default StopHost behaviour terminates the process. That is intentional — when the outbox
+    // store (Mongo) is unreachable, the entire ingester is non-functional, and exiting non-zero
+    // lets the orchestrator restart-loop surface the failure. Swallowing here would silently
+    // stall the heartbeat and leave guild sagas un-resynced, which is strictly worse. We catch
+    // only to log the reason at Error level *before* the host shutdown sequence eats the stack
+    // trace, then rethrow.
     internal async Task PublishOnceAsync(CancellationToken ct)
     {
-        await using var scope = scopeFactory.CreateAsyncScope();
-        var publish = scope.ServiceProvider.GetRequiredService<IPublishEndpoint>();
-
-        var now = clock.UtcNow;
-        var staleAfter = now - options.Value.SyncInterval;
-
-        await publish.Publish<SyncHeartbeat>(new
+        try
         {
-            Timestamp = now,
-            StaleAfter = staleAfter,
-        }, ct);
+            await using var scope = scopeFactory.CreateAsyncScope();
+            var publish = scope.ServiceProvider.GetRequiredService<IPublishEndpoint>();
 
-        logger.LogDebug(
-            "SyncHeartbeat published at {Timestamp}, StaleAfter {StaleAfter}",
-            now,
-            staleAfter);
+            var now = clock.UtcNow;
+            var staleAfter = now - options.Value.SyncInterval;
+
+            await publish.Publish<SyncHeartbeat>(new
+            {
+                Timestamp = now,
+                StaleAfter = staleAfter,
+            }, ct);
+
+            logger.LogDebug(
+                "SyncHeartbeat published at {Timestamp}, StaleAfter {StaleAfter}",
+                now,
+                staleAfter);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogError(ex, "SyncHeartbeat publish failed — ingester will shut down");
+            throw;
+        }
     }
 }
