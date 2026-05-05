@@ -36,18 +36,18 @@ public sealed class ChannelSyncConsumerTests
         var harness = provider.GetTestHarness();
         await harness.Start();
 
-        await harness.Bus.Publish<ChannelSyncRequested>(new
+        await harness.Bus.Publish<ChannelSyncDue>(new
         {
             ChannelId = ChannelId,
             GuildId   = GuildId,
             CurrentState = "Syncing",
-            LastUpdatedAt = DateTimeOffset.UtcNow,
+            UpdatedOn = DateTimeOffset.UtcNow,
             CursorSnowflake = 0L,
         });
 
         var consumerHarness = harness.GetConsumerHarness<ChannelSyncConsumer>();
-        (await consumerHarness.Consumed.Any<ChannelSyncRequested>())
-            .ShouldBeTrue("Consumer should have consumed the ChannelSyncRequested");
+        (await consumerHarness.Consumed.Any<ChannelSyncDue>())
+            .ShouldBeTrue("Consumer should have consumed the ChannelSyncDue");
 
         // N MessageCaptured events
         var captured = harness.Published.Select<MessageCaptured>().ToList();
@@ -83,17 +83,17 @@ public sealed class ChannelSyncConsumerTests
         var harness = provider.GetTestHarness();
         await harness.Start();
 
-        await harness.Bus.Publish<ChannelSyncRequested>(new
+        await harness.Bus.Publish<ChannelSyncDue>(new
         {
             ChannelId = ChannelId,
             GuildId   = GuildId,
             CurrentState = "Syncing",
-            LastUpdatedAt = DateTimeOffset.UtcNow,
+            UpdatedOn = DateTimeOffset.UtcNow,
             CursorSnowflake = inputCursor,
         });
 
         var consumerHarness = harness.GetConsumerHarness<ChannelSyncConsumer>();
-        (await consumerHarness.Consumed.Any<ChannelSyncRequested>())
+        (await consumerHarness.Consumed.Any<ChannelSyncDue>())
             .ShouldBeTrue();
 
         harness.Published.Select<MessageCaptured>().ShouldBeEmpty(
@@ -129,15 +129,15 @@ public sealed class ChannelSyncConsumerTests
         var harness = provider.GetTestHarness();
         await harness.Start();
 
-        await harness.Bus.Publish<ChannelSyncRequested>(new
+        await harness.Bus.Publish<ChannelSyncDue>(new
         {
             ChannelId = ChannelId, GuildId = GuildId,
-            CurrentState = "Syncing", LastUpdatedAt = DateTimeOffset.UtcNow,
+            CurrentState = "Syncing", UpdatedOn = DateTimeOffset.UtcNow,
             CursorSnowflake = 0L,
         });
 
         var consumerHarness = harness.GetConsumerHarness<ChannelSyncConsumer>();
-        await consumerHarness.Consumed.Any<ChannelSyncRequested>();
+        await consumerHarness.Consumed.Any<ChannelSyncDue>();
 
         var completed = harness.Published.Select<ChannelSyncCompleted>().ToList();
         completed.Count.ShouldBe(1);
@@ -168,15 +168,15 @@ public sealed class ChannelSyncConsumerTests
         var harness = provider.GetTestHarness();
         await harness.Start();
 
-        await harness.Bus.Publish<ChannelSyncRequested>(new
+        await harness.Bus.Publish<ChannelSyncDue>(new
         {
             ChannelId = ChannelId, GuildId = GuildId,
-            CurrentState = "Syncing", LastUpdatedAt = DateTimeOffset.UtcNow,
+            CurrentState = "Syncing", UpdatedOn = DateTimeOffset.UtcNow,
             CursorSnowflake = 0L,
         });
 
         var consumerHarness = harness.GetConsumerHarness<ChannelSyncConsumer>();
-        await consumerHarness.Consumed.Any<ChannelSyncRequested>();
+        await consumerHarness.Consumed.Any<ChannelSyncDue>();
 
         var syncResult = harness.Published.Select<ChannelSyncCompleted>().Single().Context.Message;
         syncResult.LastSyncedSnowflake.ShouldBe(500L);
@@ -202,15 +202,15 @@ public sealed class ChannelSyncConsumerTests
         var harness = provider.GetTestHarness();
         await harness.Start();
 
-        await harness.Bus.Publish<ChannelSyncRequested>(new
+        await harness.Bus.Publish<ChannelSyncDue>(new
         {
             ChannelId = ChannelId, GuildId = GuildId,
-            CurrentState = "Syncing", LastUpdatedAt = DateTimeOffset.UtcNow,
+            CurrentState = "Syncing", UpdatedOn = DateTimeOffset.UtcNow,
             CursorSnowflake = 0L,
         });
 
         var consumerHarness = harness.GetConsumerHarness<ChannelSyncConsumer>();
-        await consumerHarness.Consumed.Any<ChannelSyncRequested>();
+        await consumerHarness.Consumed.Any<ChannelSyncDue>();
 
         var captured = harness.Published.Select<MessageCaptured>().Single().Context.Message;
         captured.AuthorId.ShouldBe(authorSnowflake);
@@ -233,19 +233,100 @@ public sealed class ChannelSyncConsumerTests
         var harness = provider.GetTestHarness();
         await harness.Start();
 
-        await harness.Bus.Publish<ChannelSyncRequested>(new
+        await harness.Bus.Publish<ChannelSyncDue>(new
         {
             ChannelId = ChannelId, GuildId = GuildId,
-            CurrentState = "Syncing", LastUpdatedAt = DateTimeOffset.UtcNow,
+            CurrentState = "Syncing", UpdatedOn = DateTimeOffset.UtcNow,
             CursorSnowflake = 0L,
         });
 
         var consumerHarness = harness.GetConsumerHarness<ChannelSyncConsumer>();
-        await consumerHarness.Consumed.Any<ChannelSyncRequested>();
+        await consumerHarness.Consumed.Any<ChannelSyncDue>();
 
         var captured = harness.Published.Select<MessageCaptured>().Single().Context.Message;
         captured.AuthorId.ShouldBe(botSnowflake);
         captured.AuthorIsBot.ShouldBeTrue();
+    }
+
+    // ---------------------------------------------------------------------------
+    // Discord 403 → ChannelChanged(IsPresent=false) + ChannelSyncCompleted, no fault
+    // ---------------------------------------------------------------------------
+
+    [Test]
+    public async Task Consume_Discord403_PublishesChannelChangedNotPresentAndSyncCompleted_NoFault()
+    {
+        var discord = Substitute.For<IDiscordClient>();
+        discord
+            .EnumerateChannelMessagesAsync(Arg.Any<string>(), Arg.Any<long>(), Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns(x => ThrowHttpException(System.Net.HttpStatusCode.Forbidden));
+
+        await using var provider = BuildProvider(discord);
+        var harness = provider.GetTestHarness();
+        await harness.Start();
+
+        await harness.Bus.Publish<ChannelSyncDue>(new
+        {
+            ChannelId = ChannelId, GuildId = GuildId,
+            CurrentState = "Syncing", UpdatedOn = DateTimeOffset.UtcNow,
+            CursorSnowflake = 0L,
+        });
+
+        var consumerHarness = harness.GetConsumerHarness<ChannelSyncConsumer>();
+        (await consumerHarness.Consumed.Any<ChannelSyncDue>()).ShouldBeTrue();
+
+        // Must publish ChannelChanged with IsPresent=false
+        var changed = harness.Published.Select<ChannelChanged>().ToList();
+        changed.Count.ShouldBe(1);
+        changed[0].Context.Message.IsPresent.ShouldBeFalse();
+
+        // Must also publish ChannelSyncCompleted so saga can transition to CaughtUp
+        harness.Published.Select<ChannelSyncCompleted>().Count().ShouldBe(1);
+
+        // No MessageCaptured, no Fault
+        harness.Published.Select<MessageCaptured>().ShouldBeEmpty();
+        harness.Published.Select<Fault<ChannelSyncDue>>().ShouldBeEmpty();
+    }
+
+    [Test]
+    public async Task Consume_Discord404_PublishesChannelChangedNotPresentAndSyncCompleted_NoFault()
+    {
+        var discord = Substitute.For<IDiscordClient>();
+        discord
+            .EnumerateChannelMessagesAsync(Arg.Any<string>(), Arg.Any<long>(), Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns(x => ThrowHttpException(System.Net.HttpStatusCode.NotFound));
+
+        await using var provider = BuildProvider(discord);
+        var harness = provider.GetTestHarness();
+        await harness.Start();
+
+        await harness.Bus.Publish<ChannelSyncDue>(new
+        {
+            ChannelId = ChannelId, GuildId = GuildId,
+            CurrentState = "Syncing", UpdatedOn = DateTimeOffset.UtcNow,
+            CursorSnowflake = 0L,
+        });
+
+        var consumerHarness = harness.GetConsumerHarness<ChannelSyncConsumer>();
+        (await consumerHarness.Consumed.Any<ChannelSyncDue>()).ShouldBeTrue();
+
+        var changed = harness.Published.Select<ChannelChanged>().ToList();
+        changed.Count.ShouldBe(1);
+        changed[0].Context.Message.IsPresent.ShouldBeFalse();
+        harness.Published.Select<ChannelSyncCompleted>().Count().ShouldBe(1);
+        harness.Published.Select<Fault<ChannelSyncDue>>().ShouldBeEmpty();
+    }
+
+    // Produces an IAsyncEnumerable that immediately throws the given HTTP exception.
+    private static IAsyncEnumerable<DiscordMessageRaw> ThrowHttpException(System.Net.HttpStatusCode statusCode) =>
+        ThrowingAsyncEnumerable<DiscordMessageRaw>(
+            new System.Net.Http.HttpRequestException(
+                $"Discord {(int)statusCode}", inner: null, statusCode: statusCode));
+
+    private static async IAsyncEnumerable<T> ThrowingAsyncEnumerable<T>(Exception ex)
+    {
+        await Task.CompletedTask;
+        throw ex;
+        yield return default!; // satisfies the iterator contract; never reached
     }
 
     // ---------------------------------------------------------------------------

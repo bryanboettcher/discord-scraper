@@ -24,7 +24,7 @@ public interface ChannelSyncCompleted : BaseChannelEvent
 
     /// <summary>
     /// True when the page returned fewer messages than the page size, indicating no further
-    /// history exists beyond the current cursor. Cleared on the next ChannelSyncRequested.
+    /// history exists beyond the current cursor. Cleared on the next ChannelSyncDue.
     /// </summary>
     bool IsCaughtUpAtLastPoll { get; }
 }

@@ -2,7 +2,7 @@ namespace DiscordScraper.Write.Repositories;
 
 /// <summary>
 /// Batch-fetches sync cursors from channel_sagas so GuildSyncConsumer can stamp
-/// CursorSnowflake on each ChannelSyncRequested without a per-channel Mongo round-trip.
+/// CursorSnowflake on each ChannelSyncDue without a per-channel Mongo round-trip.
 /// </summary>
 public interface IChannelCursorRepo
 {

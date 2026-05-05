@@ -23,6 +23,9 @@ public interface MessageModelBase : CorrelatedBy<Guid>, ITimestamped
     long AuthorId { get; }
     string CurrentState { get; }
 
+    /// <summary>Timestamp of the last saga state transition that produced this event.</summary>
+    new DateTimeOffset UpdatedOn { get; }
+
     // Derived from snowflake so any node can compute it without coordination.
     new Guid CorrelationId => DeterministicGuid.FromSnowflake(MessageSnowflake);
 }

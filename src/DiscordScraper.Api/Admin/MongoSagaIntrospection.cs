@@ -39,7 +39,7 @@ internal sealed class MongoSagaIntrospection(IMongoDatabase db) : ISagaIntrospec
             .Include("GuildId")
             .Include("Name")
             .Include("CurrentState")
-            .Include("LastUpdatedAt")
+            .Include("UpdatedOn")
             .Include("LastSyncedAt")
             .Include("LastSyncChannelCount")
             .Include("Roles");
@@ -105,7 +105,9 @@ internal sealed class MongoSagaIntrospection(IMongoDatabase db) : ISagaIntrospec
         GuildId:              d["GuildId"].AsInt64,
         Name:                 d.GetValueOrDefault("Name", string.Empty),
         CurrentState:         d.GetValueOrDefault("CurrentState", string.Empty),
-        LastUpdatedAt:        d["LastUpdatedAt"].ToUniversalTime(),
+        UpdatedOn:            d.Contains("UpdatedOn") && !d["UpdatedOn"].IsBsonNull
+                                  ? d["UpdatedOn"].ToNullableUniversalTime()
+                                  : null,
         LastSyncedAt:         d["LastSyncedAt"].ToUniversalTime(),
         LastSyncChannelCount: d["LastSyncChannelCount"].AsInt32,
         RoleCount:            d.Contains("Roles") && d["Roles"].IsBsonArray
@@ -133,7 +135,9 @@ internal sealed class MongoSagaIntrospection(IMongoDatabase db) : ISagaIntrospec
         AuthorId:         d["AuthorId"].AsInt64,
         AuthorIsBot:      d["AuthorIsBot"].AsBoolean,
         CurrentState:     d.GetValueOrDefault("CurrentState", string.Empty),
-        LastUpdatedAt:    d["LastUpdatedAt"].ToUniversalTime(),
+        UpdatedOn:        d.Contains("UpdatedOn") && !d["UpdatedOn"].IsBsonNull
+                              ? d["UpdatedOn"].ToNullableUniversalTime()
+                              : null,
         MessageCreatedAt: d["MessageCreatedAt"].ToUniversalTime(),
         EditedTimestamp:  d.Contains("EditedTimestamp") && !d["EditedTimestamp"].IsBsonNull
                               ? d["EditedTimestamp"].ToUniversalTime()
@@ -160,4 +164,7 @@ file static class BsonDocumentExtensions
 {
     public static string GetValueOrDefault(this BsonDocument doc, string key, string defaultValue)
         => doc.Contains(key) && !doc[key].IsBsonNull ? doc[key].AsString : defaultValue;
+
+    public static DateTimeOffset? ToNullableUniversalTime(this BsonValue value)
+        => value.IsBsonNull ? null : (DateTimeOffset)value.ToUniversalTime();
 }

@@ -187,7 +187,7 @@ public sealed class PinPollConsumerTests
         GuildId,
         CurrentState = "CaughtUp",
         DueAt = FixedNow,
-        LastUpdatedAt = FixedNow,
+        UpdatedOn = FixedNow,
     };
 
     private static DiscordMessageRaw MakeMessage(long id, DateTimeOffset? editedAt) =>

@@ -5,7 +5,7 @@
     <Project Path="src/DiscordScraper.Discord/DiscordScraper.Discord.csproj" />
     <Project Path="src/DiscordScraper.Rendering/DiscordScraper.Rendering.csproj" />
     <Project Path="src/DiscordScraper.Write/DiscordScraper.Write.csproj" />
-    <Project Path="src/DiscordScraper.MessageEnhancement/DiscordScraper.MessageEnhancement.csproj" />
+    <Project Path="src/DiscordScraper.Enrichment/DiscordScraper.Enrichment.csproj" />
     <Project Path="src/DiscordScraper.Read/DiscordScraper.Read.csproj" />
     <Project Path="src/DiscordScraper.Ingester/DiscordScraper.Ingester.csproj" />
     <Project Path="src/DiscordScraper.Api/DiscordScraper.Api.csproj" />
@@ -15,7 +15,7 @@
     <Project Path="tests/DiscordScraper.Contracts.Tests/DiscordScraper.Contracts.Tests.csproj" />
     <Project Path="tests/DiscordScraper.Rendering.Tests/DiscordScraper.Rendering.Tests.csproj" />
     <Project Path="tests/DiscordScraper.Write.Tests/DiscordScraper.Write.Tests.csproj" />
-    <Project Path="tests/DiscordScraper.MessageEnhancement.Tests/DiscordScraper.MessageEnhancement.Tests.csproj" />
+    <Project Path="tests/DiscordScraper.Enrichment.Tests/DiscordScraper.Enrichment.Tests.csproj" />
     <Project Path="tests/DiscordScraper.Read.Tests/DiscordScraper.Read.Tests.csproj" />
     <Project Path="tests/DiscordScraper.Api.Tests/DiscordScraper.Api.Tests.csproj" />
   </Folder>

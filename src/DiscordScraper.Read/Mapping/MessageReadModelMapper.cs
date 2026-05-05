@@ -33,10 +33,10 @@ public static partial class MessageReadModelMapper
     [MapperIgnoreSource(nameof(MessageEnriched.Tags))]
     // MessageId on source is the Guid form — already mapped via MessageSnowflake → MessageId above.
     [MapperIgnoreSource(nameof(MessageEnriched.MessageId))]
-    // CurrentState, CorrelationId, LastUpdatedAt are MassTransit-internal; not persisted to read_messages.
+    // CurrentState, CorrelationId, UpdatedOn are MassTransit-internal; not persisted to read_messages.
     [MapperIgnoreSource(nameof(MessageEnriched.CurrentState))]
     [MapperIgnoreSource(nameof(MessageEnriched.CorrelationId))]
-    [MapperIgnoreSource(nameof(MessageEnriched.LastUpdatedAt))]
+    [MapperIgnoreSource(nameof(MessageEnriched.UpdatedOn))]
     public static partial ReadMessage ToReadMessage(MessageEnriched evt);
 
     public static IReadOnlyList<MessageTag> ToMessageTags(long messageId, IReadOnlyList<string> tags)

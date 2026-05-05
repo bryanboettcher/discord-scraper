@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using DiscordScraper.Api.Admin;
 using DiscordScraper.Contracts.Events.Channel;
 using DiscordScraper.Contracts.Events.Guild;
+using DiscordScraper.Contracts.Events.Message;
 using MassTransit;
 using NSubstitute;
 
@@ -27,7 +28,7 @@ public abstract class AdminEndpointsTests
 
     private static GuildSagaSnapshot BuildGuildSnapshot(long id = 1L) => new(
         GuildId: id, Name: "TestGuild", CurrentState: "Synced",
-        LastUpdatedAt: FixedNow, LastSyncedAt: FixedNow,
+        UpdatedOn: FixedNow, LastSyncedAt: FixedNow,
         LastSyncChannelCount: 5, RoleCount: 3);
 
     private static ChannelSagaSnapshot BuildChannelSnapshot(long id = 10L, long guildId = 1L) => new(
@@ -199,12 +200,12 @@ public abstract class AdminEndpointsTests
         }
 
         [Test]
-        public async Task It_should_publish_GuildSyncRequested_with_correct_guildId()
+        public async Task It_should_publish_GuildSyncDue_with_correct_guildId()
         {
             await Client.PostAsync("/api/admin/sync/guilds/42", null);
 
             await Factory.PublishEndpoint.Received(1)
-                .Publish<GuildSyncRequested>(
+                .Publish<GuildSyncDue>(
                     Arg.Is<object>(o => HasProperty(o, "GuildId", 42L)),
                     Arg.Any<CancellationToken>());
         }
@@ -215,8 +216,8 @@ public abstract class AdminEndpointsTests
             await Client.PostAsync("/api/admin/sync/guilds/42", null);
 
             await Factory.PublishEndpoint.Received(1)
-                .Publish<GuildSyncRequested>(
-                    Arg.Is<object>(o => HasProperty(o, "LastUpdatedAt", FixedNow)),
+                .Publish<GuildSyncDue>(
+                    Arg.Is<object>(o => HasProperty(o, "UpdatedOn", FixedNow)),
                     Arg.Any<CancellationToken>());
         }
 
@@ -247,12 +248,12 @@ public abstract class AdminEndpointsTests
         }
 
         [Test]
-        public async Task It_should_publish_ChannelSyncRequested_with_correct_ids()
+        public async Task It_should_publish_ChannelSyncDue_with_correct_ids()
         {
             await Client.PostAsync("/api/admin/sync/channels/99?guildId=1", null);
 
             await Factory.PublishEndpoint.Received(1)
-                .Publish<ChannelSyncRequested>(
+                .Publish<ChannelSyncDue>(
                     Arg.Is<object>(o => HasProperty(o, "ChannelId", 99L) && HasProperty(o, "GuildId", 1L)),
                     Arg.Any<CancellationToken>());
         }
@@ -263,7 +264,7 @@ public abstract class AdminEndpointsTests
             await Client.PostAsync("/api/admin/sync/channels/99?guildId=1&cursorSnowflake=555", null);
 
             await Factory.PublishEndpoint.Received(1)
-                .Publish<ChannelSyncRequested>(
+                .Publish<ChannelSyncDue>(
                     Arg.Is<object>(o => HasNullableLongProperty(o, "CursorSnowflake", 555L)),
                     Arg.Any<CancellationToken>());
         }
@@ -285,7 +286,7 @@ public abstract class AdminEndpointsTests
     {
         private static readonly MessageSagaSnapshot Snapshot = new(
             MessageSnowflake: 12345L, ChannelId: 10L, GuildId: 1L, AuthorId: 99L,
-            AuthorIsBot: false, CurrentState: "Indexed", LastUpdatedAt: FixedNow,
+            AuthorIsBot: false, CurrentState: "Indexed", UpdatedOn: FixedNow,
             MessageCreatedAt: FixedNow, EditedTimestamp: null, HasPendingEdit: false,
             IsSubstantive: true, IsBot: false, DetectedLanguage: "en",
             Tags: ["tech"], IndexedAt: FixedNow);
@@ -329,6 +330,142 @@ public abstract class AdminEndpointsTests
         {
             var response = await Client.GetAsync("/api/admin/sagas/messages/99999");
             response.StatusCode.ShouldBe(HttpStatusCode.NotFound);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // POST /api/admin/sagas/messages/replay-faulted
+    // -------------------------------------------------------------------------
+
+    public sealed class ReplayFaulted_no_phase_returns_202 : AdminEndpointsTests
+    {
+        [Test]
+        public async Task It_should_return_202()
+        {
+            var response = await Client.PostAsync("/api/admin/sagas/messages/replay-faulted", null);
+            response.StatusCode.ShouldBe(HttpStatusCode.Accepted);
+        }
+
+        [Test]
+        public async Task It_should_publish_MessageReplayRequested_with_null_Phase()
+        {
+            await Client.PostAsync("/api/admin/sagas/messages/replay-faulted", null);
+
+            await Factory.PublishEndpoint.Received(1)
+                .Publish<MessageReplayRequested>(
+                    Arg.Is<object>(o => HasNullableStringProperty(o, "Phase", null)),
+                    Arg.Any<CancellationToken>());
+        }
+
+        [Test]
+        public async Task It_should_stamp_current_Timestamp_on_published_event()
+        {
+            await Client.PostAsync("/api/admin/sagas/messages/replay-faulted", null);
+
+            await Factory.PublishEndpoint.Received(1)
+                .Publish<MessageReplayRequested>(
+                    Arg.Is<object>(o => HasProperty(o, "Timestamp", FixedNow)),
+                    Arg.Any<CancellationToken>());
+        }
+
+        private static bool HasProperty<TValue>(object msg, string name, TValue expected)
+        {
+            var prop = msg.GetType().GetProperty(name);
+            return prop is not null && EqualityComparer<TValue>.Default.Equals((TValue)prop.GetValue(msg)!, expected);
+        }
+
+        private static bool HasNullableStringProperty(object msg, string name, string? expected)
+        {
+            var prop = msg.GetType().GetProperty(name);
+            if (prop is null) return false;
+            var value = prop.GetValue(msg) as string;
+            return value == expected;
+        }
+    }
+
+    public sealed class ReplayFaulted_phase_tag_returns_202 : AdminEndpointsTests
+    {
+        [Test]
+        public async Task It_should_return_202()
+        {
+            var response = await Client.PostAsync("/api/admin/sagas/messages/replay-faulted?phase=tag", null);
+            response.StatusCode.ShouldBe(HttpStatusCode.Accepted);
+        }
+
+        [Test]
+        public async Task It_should_publish_MessageReplayRequested_with_Phase_tag()
+        {
+            await Client.PostAsync("/api/admin/sagas/messages/replay-faulted?phase=tag", null);
+
+            await Factory.PublishEndpoint.Received(1)
+                .Publish<MessageReplayRequested>(
+                    Arg.Is<object>(o => HasStringProperty(o, "Phase", "tag")),
+                    Arg.Any<CancellationToken>());
+        }
+
+        private static bool HasStringProperty(object msg, string name, string expected)
+        {
+            var prop = msg.GetType().GetProperty(name);
+            return prop is not null && (string?)prop.GetValue(msg) == expected;
+        }
+    }
+
+    public sealed class ReplayFaulted_phase_classify_returns_202 : AdminEndpointsTests
+    {
+        [Test]
+        public async Task It_should_return_202()
+        {
+            var response = await Client.PostAsync("/api/admin/sagas/messages/replay-faulted?phase=classify", null);
+            response.StatusCode.ShouldBe(HttpStatusCode.Accepted);
+        }
+
+        [Test]
+        public async Task It_should_publish_MessageReplayRequested_with_Phase_classify()
+        {
+            await Client.PostAsync("/api/admin/sagas/messages/replay-faulted?phase=classify", null);
+
+            await Factory.PublishEndpoint.Received(1)
+                .Publish<MessageReplayRequested>(
+                    Arg.Is<object>(o => HasStringProperty(o, "Phase", "classify")),
+                    Arg.Any<CancellationToken>());
+        }
+
+        private static bool HasStringProperty(object msg, string name, string expected)
+        {
+            var prop = msg.GetType().GetProperty(name);
+            return prop is not null && (string?)prop.GetValue(msg) == expected;
+        }
+    }
+
+    /// <summary>
+    /// The endpoint has no phase allowlist — unrecognised phase values are forwarded as-is.
+    /// The saga's CorrelateBy predicate will find no matching instances and discard silently.
+    /// This test documents the actual behavior so a future validation PR is a deliberate change.
+    /// </summary>
+    public sealed class ReplayFaulted_invalid_phase_returns_202_no_validation : AdminEndpointsTests
+    {
+        [Test]
+        public async Task It_should_return_202_because_endpoint_does_not_validate_phase()
+        {
+            var response = await Client.PostAsync("/api/admin/sagas/messages/replay-faulted?phase=bogus", null);
+            response.StatusCode.ShouldBe(HttpStatusCode.Accepted);
+        }
+
+        [Test]
+        public async Task It_should_still_publish_MessageReplayRequested_with_bogus_Phase()
+        {
+            await Client.PostAsync("/api/admin/sagas/messages/replay-faulted?phase=bogus", null);
+
+            await Factory.PublishEndpoint.Received(1)
+                .Publish<MessageReplayRequested>(
+                    Arg.Is<object>(o => HasStringProperty(o, "Phase", "bogus")),
+                    Arg.Any<CancellationToken>());
+        }
+
+        private static bool HasStringProperty(object msg, string name, string expected)
+        {
+            var prop = msg.GetType().GetProperty(name);
+            return prop is not null && (string?)prop.GetValue(msg) == expected;
         }
     }
 }

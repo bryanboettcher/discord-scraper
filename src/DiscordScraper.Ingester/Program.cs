@@ -1,11 +1,11 @@
 using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Core.Configuration;
 using DiscordScraper.Discord.Extensions;
-using DiscordScraper.MessageEnhancement;
-using DiscordScraper.MessageEnhancement.Extensions;
+using DiscordScraper.Enrichment;
+using DiscordScraper.Enrichment.Extensions;
 using DiscordScraper.Read;
-using DiscordScraper.Read.Extensions;
 using DiscordScraper.Read.Configuration;
+using DiscordScraper.Read.Extensions;
 using DiscordScraper.Write;
 using DiscordScraper.Write.Configuration;
 using DiscordScraper.Write.Extensions;
@@ -40,6 +40,13 @@ builder.Services.AddOptions<PostgresOptions>()
     .ValidateDataAnnotations()
     .ValidateOnStart();
 
+builder.Services.AddOptions<MessageReadBatchOptions>()
+    .BindConfiguration(MessageReadBatchOptions.SectionName);
+builder.Services.AddOptions<ChannelReadBatchOptions>()
+    .BindConfiguration(ChannelReadBatchOptions.SectionName);
+builder.Services.AddOptions<GuildReadBatchOptions>()
+    .BindConfiguration(GuildReadBatchOptions.SectionName);
+
 // ISystemClock is consumed by sagas, scheduler, consumers — register once at the host root.
 builder.Services.AddSingleton<ISystemClock, SystemClock>();
 
@@ -58,10 +65,10 @@ builder.Services.AddSingleton(sp =>
     sp.GetRequiredService<IMongoClient>()
       .GetDatabase(sp.GetRequiredService<IOptions<MongoOptions>>().Value.DatabaseName));
 
-// --- Discord REST client + Write/Enhancement services ---
+// --- Discord REST client + Write/Enrichment services ---
 builder.Services.AddDiscordClient();
 builder.Services.AddWriteServices();
-builder.Services.AddMessageEnhancementClients();
+builder.Services.AddEnrichmentClients();
 
 // PgVectorStore + dedicated NpgsqlDataSource with vector type mapping. Must register before
 // AddReadModels so the EF context factory inherits the same data source.
@@ -71,7 +78,7 @@ builder.Services.AddReadVectorStore();
 builder.Services.AddMassTransit(x =>
 {
     x.AddWriteSagasAndConsumers();
-    x.AddConsumers(typeof(MessageEnhancementAssemblyMarker).Assembly);
+    x.AddConsumers(typeof(EnrichmentAssemblyMarker).Assembly);
     x.AddConsumers(typeof(ReadAssemblyMarker).Assembly);
 
     // Outbox requires Mongo running as a single-node replica set (docker-compose configures rs0).

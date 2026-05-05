@@ -1,12 +1,9 @@
 using System.Collections;
 using DiscordScraper.Contracts.Events.Guild;
 using DiscordScraper.Read.Consumers;
-using DiscordScraper.Read.Data;
 using DiscordScraper.Read.Data.Entities;
+using DiscordScraper.Read.Mapping;
 using MassTransit;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Diagnostics;
-using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 
@@ -19,8 +16,9 @@ public sealed class TestGuildChanged : GuildChanged
     public long GuildId { get; init; }
     public string Name { get; init; } = string.Empty;
     public IReadOnlyList<GuildRole> Roles { get; init; } = [];
+    public bool IsPresent { get; init; } = true;
     public string CurrentState { get; init; } = string.Empty;
-    public DateTimeOffset LastUpdatedAt { get; set; }
+    public DateTimeOffset UpdatedOn { get; set; }
     public Guid CorrelationId => Guid.NewGuid();
 }
 
@@ -30,24 +28,6 @@ public sealed class GuildReadConsumerTests
     // ---------------------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------------------
-
-    private static IDbContextFactory<ReadDbContext> BuildFactory()
-    {
-        var opts = new DbContextOptionsBuilder<ReadDbContext>()
-            .UseInMemoryDatabase(Guid.NewGuid().ToString())
-            .ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning))
-            .Options;
-        return new FakeReadDbContextFactory(opts);
-    }
-
-    private sealed class FakeReadDbContextFactory(DbContextOptions<ReadDbContext> opts)
-        : IDbContextFactory<ReadDbContext>
-    {
-        public ReadDbContext CreateDbContext() => new(opts);
-
-        public ValueTask<ReadDbContext> CreateDbContextAsync(CancellationToken ct = default) =>
-            ValueTask.FromResult(new ReadDbContext(opts));
-    }
 
     private static ConsumeContext<Batch<GuildChanged>> BuildBatchContext(
         params GuildChanged[] events)
@@ -88,35 +68,55 @@ public sealed class GuildReadConsumerTests
     private static TestGuildChanged MakeEvent(
         long guildId = 555L,
         string name = "My Guild") =>
-        new() { GuildId = guildId, Name = name, CurrentState = "Active", LastUpdatedAt = _testTime };
+        new() { GuildId = guildId, Name = name, CurrentState = "Active", UpdatedOn = _testTime };
+
+    private static GuildReadConsumer BuildConsumer(IBulkWriter<ReadGuild> writer) =>
+        new(new MapperlyGuildChangedProjector(), writer, NullLogger<GuildReadConsumer>.Instance);
 
     // ---------------------------------------------------------------------------
-    // Tests
+    // Projector-level tests (pure event-in / entity-out, no consumer overhead)
+    // ---------------------------------------------------------------------------
+
+    [Test]
+    public void Projector_SingleEvent_YieldsOneReadGuild()
+    {
+        var projector = new MapperlyGuildChangedProjector();
+        var result = projector.Project(MakeEvent(guildId: 42L)).ToList();
+        result.Count.ShouldBe(1);
+        result[0].GuildId.ShouldBe(42L);
+    }
+
+    [Test]
+    public void Projector_FieldMapping_AllFieldsProjectedCorrectly()
+    {
+        var projector = new MapperlyGuildChangedProjector();
+        var result = projector.Project(MakeEvent(guildId: 42L, name: "Awesome Guild")).Single();
+
+        result.GuildId.ShouldBe(42L);
+        result.Name.ShouldBe("Awesome Guild");
+        result.UpdatedAt.ShouldBe(_testTime);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Consumer-level tests
     // ---------------------------------------------------------------------------
 
     [Test]
     public async Task SingleEvent_WriterReceivesOneReadGuild()
     {
-        var writer = Substitute.For<IReadBulkWriter>();
-        var consumer = new GuildReadConsumer(BuildFactory(), writer, NullLogger<GuildReadConsumer>.Instance);
-
-        await consumer.Consume(BuildBatchContext(MakeEvent()));
+        var writer = Substitute.For<IBulkWriter<ReadGuild>>();
+        await BuildConsumer(writer).Consume(BuildBatchContext(MakeEvent()));
 
         await writer.Received(1).WriteAsync(
-            Arg.Any<ReadDbContext>(),
-            Arg.Any<IDbContextTransaction>(),
-            Arg.Is<IReadOnlyDictionary<Type, IList<object>>>(d =>
-                d.ContainsKey(typeof(ReadGuild)) && d[typeof(ReadGuild)].Count == 1),
+            Arg.Is<IEnumerable<ReadGuild>>(e => e.Count() == 1),
             Arg.Any<CancellationToken>());
     }
 
     [Test]
     public async Task FiveEvents_WriterReceivesFiveReadGuilds()
     {
-        var writer = Substitute.For<IReadBulkWriter>();
-        var consumer = new GuildReadConsumer(BuildFactory(), writer, NullLogger<GuildReadConsumer>.Instance);
-
-        await consumer.Consume(BuildBatchContext(
+        var writer = Substitute.For<IBulkWriter<ReadGuild>>();
+        await BuildConsumer(writer).Consume(BuildBatchContext(
             MakeEvent(guildId: 1L),
             MakeEvent(guildId: 2L),
             MakeEvent(guildId: 3L),
@@ -124,33 +124,22 @@ public sealed class GuildReadConsumerTests
             MakeEvent(guildId: 5L)));
 
         await writer.Received(1).WriteAsync(
-            Arg.Any<ReadDbContext>(),
-            Arg.Any<IDbContextTransaction>(),
-            Arg.Is<IReadOnlyDictionary<Type, IList<object>>>(d =>
-                d[typeof(ReadGuild)].Count == 5),
+            Arg.Is<IEnumerable<ReadGuild>>(e => e.Count() == 5),
             Arg.Any<CancellationToken>());
     }
 
     [Test]
-    public async Task UpdatedAt_MapsFromLastUpdatedAt()
+    public async Task UpdatedAt_MapsFromUpdatedOn()
     {
         ReadGuild? captured = null;
 
-        var writer = Substitute.For<IReadBulkWriter>();
-        writer.When(w => w.WriteAsync(
-                Arg.Any<ReadDbContext>(),
-                Arg.Any<IDbContextTransaction>(),
-                Arg.Any<IReadOnlyDictionary<Type, IList<object>>>(),
-                Arg.Any<CancellationToken>()))
-            .Do(call =>
-            {
-                var dict = call.ArgAt<IReadOnlyDictionary<Type, IList<object>>>(2);
-                captured = (ReadGuild)dict[typeof(ReadGuild)][0];
-            });
+        var writer = Substitute.For<IBulkWriter<ReadGuild>>();
+        writer.When(w => w.WriteAsync(Arg.Any<IEnumerable<ReadGuild>>(), Arg.Any<CancellationToken>()))
+            .Do(call => captured = call.ArgAt<IEnumerable<ReadGuild>>(0).First());
 
         var specificTime = new DateTimeOffset(2025, 3, 15, 9, 30, 0, TimeSpan.Zero);
-        var consumer = new GuildReadConsumer(BuildFactory(), writer, NullLogger<GuildReadConsumer>.Instance);
-        await consumer.Consume(BuildBatchContext(new TestGuildChanged { GuildId = 777L, Name = "Test Guild", CurrentState = "Active", LastUpdatedAt = specificTime }));
+        await BuildConsumer(writer).Consume(BuildBatchContext(
+            new TestGuildChanged { GuildId = 777L, Name = "Test Guild", CurrentState = "Active", UpdatedOn = specificTime }));
 
         captured.ShouldNotBeNull();
         captured.UpdatedAt.ShouldBe(specificTime);
@@ -161,20 +150,11 @@ public sealed class GuildReadConsumerTests
     {
         ReadGuild? captured = null;
 
-        var writer = Substitute.For<IReadBulkWriter>();
-        writer.When(w => w.WriteAsync(
-                Arg.Any<ReadDbContext>(),
-                Arg.Any<IDbContextTransaction>(),
-                Arg.Any<IReadOnlyDictionary<Type, IList<object>>>(),
-                Arg.Any<CancellationToken>()))
-            .Do(call =>
-            {
-                var dict = call.ArgAt<IReadOnlyDictionary<Type, IList<object>>>(2);
-                captured = (ReadGuild)dict[typeof(ReadGuild)][0];
-            });
+        var writer = Substitute.For<IBulkWriter<ReadGuild>>();
+        writer.When(w => w.WriteAsync(Arg.Any<IEnumerable<ReadGuild>>(), Arg.Any<CancellationToken>()))
+            .Do(call => captured = call.ArgAt<IEnumerable<ReadGuild>>(0).First());
 
-        var consumer = new GuildReadConsumer(BuildFactory(), writer, NullLogger<GuildReadConsumer>.Instance);
-        await consumer.Consume(BuildBatchContext(MakeEvent(guildId: 42L, name: "Awesome Guild")));
+        await BuildConsumer(writer).Consume(BuildBatchContext(MakeEvent(guildId: 42L, name: "Awesome Guild")));
 
         captured.ShouldNotBeNull();
         captured.GuildId.ShouldBe(42L);

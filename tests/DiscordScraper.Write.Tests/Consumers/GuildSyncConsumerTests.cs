@@ -65,16 +65,16 @@ public sealed class GuildSyncConsumerTests
         var harness = provider.GetTestHarness();
         await harness.Start();
 
-        await harness.Bus.Publish<GuildSyncRequested>(new
+        await harness.Bus.Publish<GuildSyncDue>(new
         {
             CorrelationId = DeterministicGuid.FromSnowflake(GuildId),
-            GuildId = GuildId, CurrentState = "Requested", LastUpdatedAt = DateTimeOffset.UtcNow,
+            GuildId = GuildId, CurrentState = "Requested", UpdatedOn = DateTimeOffset.UtcNow,
         });
 
-        // Wait for both ChannelSyncRequested publishes before asserting counts.
+        // Wait for both ChannelSyncDue publishes before asserting counts.
         (await harness.Published.Any<GuildChanged>()).ShouldBeTrue("GuildChanged signals consumer completed");
 
-        var published = harness.Published.Select<ChannelSyncRequested>().ToList();
+        var published = harness.Published.Select<ChannelSyncDue>().ToList();
         published.Count.ShouldBe(2);
         published.ShouldAllBe(p => p.Context.Message.CursorSnowflake == 0L,
             "All channels should get cursor=0 when repo returns empty");
@@ -109,16 +109,16 @@ public sealed class GuildSyncConsumerTests
         var harness = provider.GetTestHarness();
         await harness.Start();
 
-        await harness.Bus.Publish<GuildSyncRequested>(new
+        await harness.Bus.Publish<GuildSyncDue>(new
         {
             CorrelationId = DeterministicGuid.FromSnowflake(GuildId),
-            GuildId = GuildId, CurrentState = "Requested", LastUpdatedAt = DateTimeOffset.UtcNow,
+            GuildId = GuildId, CurrentState = "Requested", UpdatedOn = DateTimeOffset.UtcNow,
         });
 
-        // GuildChanged is the terminal publish — wait for it so all ChannelSyncRequested are queued.
+        // GuildChanged is the terminal publish — wait for it so all ChannelSyncDue are queued.
         (await harness.Published.Any<GuildChanged>()).ShouldBeTrue();
 
-        var byChannel = harness.Published.Select<ChannelSyncRequested>()
+        var byChannel = harness.Published.Select<ChannelSyncDue>()
             .ToDictionary(p => p.Context.Message.ChannelId, p => p.Context.Message.CursorSnowflake);
 
         byChannel[2001L].ShouldBe(cursor1);
@@ -150,18 +150,18 @@ public sealed class GuildSyncConsumerTests
         var harness = provider.GetTestHarness();
         await harness.Start();
 
-        await harness.Bus.Publish<GuildSyncRequested>(new
+        await harness.Bus.Publish<GuildSyncDue>(new
         {
             CorrelationId = DeterministicGuid.FromSnowflake(GuildId),
-            GuildId = GuildId, CurrentState = "Requested", LastUpdatedAt = DateTimeOffset.UtcNow,
+            GuildId = GuildId, CurrentState = "Requested", UpdatedOn = DateTimeOffset.UtcNow,
         });
 
         // Wait for the fault to be published (consumer threw)
-        (await harness.Published.Any<Fault<GuildSyncRequested>>()).ShouldBeTrue(
+        (await harness.Published.Any<Fault<GuildSyncDue>>()).ShouldBeTrue(
             "A fault should be published when the cursor repo throws");
 
         // No channel sync requests published — the exception aborted the publish loop
-        harness.Published.Select<ChannelSyncRequested>().ShouldBeEmpty();
+        harness.Published.Select<ChannelSyncDue>().ShouldBeEmpty();
     }
 
     // ---------------------------------------------------------------------------
@@ -184,10 +184,10 @@ public sealed class GuildSyncConsumerTests
         var harness = provider.GetTestHarness();
         await harness.Start();
 
-        await harness.Bus.Publish<GuildSyncRequested>(new
+        await harness.Bus.Publish<GuildSyncDue>(new
         {
             CorrelationId = DeterministicGuid.FromSnowflake(GuildId),
-            GuildId = GuildId, CurrentState = "Requested", LastUpdatedAt = DateTimeOffset.UtcNow,
+            GuildId = GuildId, CurrentState = "Requested", UpdatedOn = DateTimeOffset.UtcNow,
         });
 
         (await harness.Published.Any<GuildChanged>()).ShouldBeTrue();
@@ -228,10 +228,10 @@ public sealed class GuildSyncConsumerTests
         var harness = provider.GetTestHarness();
         await harness.Start();
 
-        await harness.Bus.Publish<GuildSyncRequested>(new
+        await harness.Bus.Publish<GuildSyncDue>(new
         {
             CorrelationId = DeterministicGuid.FromSnowflake(GuildId),
-            GuildId = GuildId, CurrentState = "Requested", LastUpdatedAt = DateTimeOffset.UtcNow,
+            GuildId = GuildId, CurrentState = "Requested", UpdatedOn = DateTimeOffset.UtcNow,
         });
 
         (await harness.Published.Any<GuildChanged>()).ShouldBeTrue();
@@ -266,10 +266,10 @@ public sealed class GuildSyncConsumerTests
         var harness = provider.GetTestHarness();
         await harness.Start();
 
-        await harness.Bus.Publish<GuildSyncRequested>(new
+        await harness.Bus.Publish<GuildSyncDue>(new
         {
             CorrelationId = DeterministicGuid.FromSnowflake(GuildId),
-            GuildId = GuildId, CurrentState = "Requested", LastUpdatedAt = DateTimeOffset.UtcNow,
+            GuildId = GuildId, CurrentState = "Requested", UpdatedOn = DateTimeOffset.UtcNow,
         });
 
         (await harness.Published.Any<GuildChanged>()).ShouldBeTrue("GuildChanged signals consumer completed");
@@ -287,6 +287,71 @@ public sealed class GuildSyncConsumerTests
         var threadMsg = channelChangedByChannel[5001L];
         threadMsg.ChannelType.ShouldBe(11);
         threadMsg.ParentId.ShouldBe(5000L);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Discord 403 on guild fetch → GuildChanged(IsPresent=false); no channel events; no fault
+    // ---------------------------------------------------------------------------
+
+    [Test]
+    public async Task Consume_Discord403OnGuildFetch_PublishesGuildChangedNotPresent_NoChannelEvents()
+    {
+        var discord = Substitute.For<IDiscordClient>();
+        discord.GetGuildAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .ThrowsAsync(new System.Net.Http.HttpRequestException(
+                "403 Forbidden", inner: null, statusCode: System.Net.HttpStatusCode.Forbidden));
+
+        var cursorRepo = Substitute.For<IChannelCursorRepo>();
+
+        await using var provider = BuildProvider(discord, cursorRepo);
+        var harness = provider.GetTestHarness();
+        await harness.Start();
+
+        await harness.Bus.Publish<GuildSyncDue>(new
+        {
+            CorrelationId = DeterministicGuid.FromSnowflake(GuildId),
+            GuildId = GuildId, CurrentState = "Requested", UpdatedOn = DateTimeOffset.UtcNow,
+        });
+
+        (await harness.Published.Any<GuildChanged>()).ShouldBeTrue();
+
+        var guildChanged = harness.Published.Select<GuildChanged>().Single().Context.Message;
+        guildChanged.IsPresent.ShouldBeFalse();
+
+        // No per-channel events published
+        harness.Published.Select<ChannelSyncDue>().ShouldBeEmpty();
+        harness.Published.Select<ChannelChanged>().ShouldBeEmpty();
+
+        // No fault
+        harness.Published.Select<Fault<GuildSyncDue>>().ShouldBeEmpty();
+    }
+
+    [Test]
+    public async Task Consume_Discord404OnGuildFetch_PublishesGuildChangedNotPresent_NoChannelEvents()
+    {
+        var discord = Substitute.For<IDiscordClient>();
+        discord.GetGuildAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .ThrowsAsync(new System.Net.Http.HttpRequestException(
+                "404 Not Found", inner: null, statusCode: System.Net.HttpStatusCode.NotFound));
+
+        var cursorRepo = Substitute.For<IChannelCursorRepo>();
+
+        await using var provider = BuildProvider(discord, cursorRepo);
+        var harness = provider.GetTestHarness();
+        await harness.Start();
+
+        await harness.Bus.Publish<GuildSyncDue>(new
+        {
+            CorrelationId = DeterministicGuid.FromSnowflake(GuildId),
+            GuildId = GuildId, CurrentState = "Requested", UpdatedOn = DateTimeOffset.UtcNow,
+        });
+
+        (await harness.Published.Any<GuildChanged>()).ShouldBeTrue();
+
+        var guildChanged = harness.Published.Select<GuildChanged>().Single().Context.Message;
+        guildChanged.IsPresent.ShouldBeFalse();
+        harness.Published.Select<ChannelSyncDue>().ShouldBeEmpty();
+        harness.Published.Select<Fault<GuildSyncDue>>().ShouldBeEmpty();
     }
 
     // ---------------------------------------------------------------------------

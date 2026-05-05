@@ -18,11 +18,11 @@ public sealed class ChannelSagaStateMachineTests
     private static Guid ExpectedCorrelationId => DeterministicGuid.FromSnowflake(TestChannelId);
 
     // ---------------------------------------------------------------------------
-    // Init: ChannelSyncRequested creates saga in Syncing
+    // Init: ChannelSyncDue creates saga in Syncing
     // ---------------------------------------------------------------------------
 
     [Test]
-    public async Task InitFromSyncRequested_CreatesSagaInSyncingState()
+    public async Task InitFromSyncDue_CreatesSagaInSyncingState()
     {
         var clock = Substitute.For<ISystemClock>();
         clock.UtcNow.Returns(DateTimeOffset.UtcNow);
@@ -31,12 +31,12 @@ public sealed class ChannelSagaStateMachineTests
         var harness = provider.GetTestHarness();
         await harness.Start();
 
-        await harness.Bus.Publish<ChannelSyncRequested>(new
+        await harness.Bus.Publish<ChannelSyncDue>(new
         {
             ChannelId = TestChannelId,
             GuildId   = TestGuildId,
             CurrentState = "Initial",
-            LastUpdatedAt = DateTimeOffset.UtcNow,
+            UpdatedOn = DateTimeOffset.UtcNow,
             CursorSnowflake = (long?)null,
         });
 
@@ -46,7 +46,7 @@ public sealed class ChannelSagaStateMachineTests
             m => m.Syncing,
             TimeSpan.FromSeconds(5));
 
-        exists.ShouldNotBeNull("Saga should exist in Syncing state after ChannelSyncRequested");
+        exists.ShouldNotBeNull("Saga should exist in Syncing state after ChannelSyncDue");
 
         var saga = sagaHarness.Sagas.Contains(ExpectedCorrelationId);
         saga.ShouldNotBeNull();
@@ -69,12 +69,12 @@ public sealed class ChannelSagaStateMachineTests
         var harness = provider.GetTestHarness();
         await harness.Start();
 
-        await harness.Bus.Publish<ChannelSyncRequested>(new
+        await harness.Bus.Publish<ChannelSyncDue>(new
         {
             ChannelId = TestChannelId,
             GuildId   = TestGuildId,
             CurrentState = "Initial",
-            LastUpdatedAt = DateTimeOffset.UtcNow,
+            UpdatedOn = DateTimeOffset.UtcNow,
             CursorSnowflake = (long?)null,
         });
 
@@ -89,7 +89,7 @@ public sealed class ChannelSagaStateMachineTests
             ChannelId              = TestChannelId,
             GuildId                = TestGuildId,
             CurrentState           = "CaughtUp",
-            LastUpdatedAt          = DateTimeOffset.UtcNow,
+            UpdatedOn          = DateTimeOffset.UtcNow,
             Name                   = "general",
             ChannelType            = 0,
             ParentId               = (long?)null,
@@ -111,11 +111,11 @@ public sealed class ChannelSagaStateMachineTests
     }
 
     // ---------------------------------------------------------------------------
-    // Re-entry: subsequent ChannelSyncRequested while CaughtUp re-enters Syncing
+    // Re-entry: subsequent ChannelSyncDue while CaughtUp re-enters Syncing
     // ---------------------------------------------------------------------------
 
     [Test]
-    public async Task SubsequentSyncRequested_WhileCaughtUp_ReentersSyncing()
+    public async Task SubsequentSyncDue_WhileCaughtUp_ReentersSyncing()
     {
         var clock = Substitute.For<ISystemClock>();
         clock.UtcNow.Returns(DateTimeOffset.UtcNow);
@@ -127,10 +127,10 @@ public sealed class ChannelSagaStateMachineTests
         var sagaHarness = harness.GetSagaStateMachineHarness<ChannelSagaStateMachine, ChannelSagaState>();
 
         // First sync cycle
-        await harness.Bus.Publish<ChannelSyncRequested>(new
+        await harness.Bus.Publish<ChannelSyncDue>(new
         {
             ChannelId = TestChannelId, GuildId = TestGuildId,
-            CurrentState = "Initial", LastUpdatedAt = DateTimeOffset.UtcNow,
+            CurrentState = "Initial", UpdatedOn = DateTimeOffset.UtcNow,
             CursorSnowflake = (long?)null,
         });
         await sagaHarness.Exists(ExpectedCorrelationId, m => m.Syncing, TimeSpan.FromSeconds(5));
@@ -138,23 +138,23 @@ public sealed class ChannelSagaStateMachineTests
         await harness.Bus.Publish<ChannelSyncCompleted>(new
         {
             ChannelId = TestChannelId, GuildId = TestGuildId,
-            CurrentState = "CaughtUp", LastUpdatedAt = DateTimeOffset.UtcNow,
+            CurrentState = "CaughtUp", UpdatedOn = DateTimeOffset.UtcNow,
             Name = "general", ChannelType = 0, ParentId = (long?)null,
             LastSyncedSnowflake = 100L, MessageCount = 5, IsCaughtUpAtLastPoll = true,
         });
         await sagaHarness.Exists(ExpectedCorrelationId, m => m.CaughtUp, TimeSpan.FromSeconds(5));
 
-        // Second ChannelSyncRequested should re-enter Syncing
-        await harness.Bus.Publish<ChannelSyncRequested>(new
+        // Second ChannelSyncDue should re-enter Syncing
+        await harness.Bus.Publish<ChannelSyncDue>(new
         {
             ChannelId = TestChannelId, GuildId = TestGuildId,
-            CurrentState = "CaughtUp", LastUpdatedAt = DateTimeOffset.UtcNow,
+            CurrentState = "CaughtUp", UpdatedOn = DateTimeOffset.UtcNow,
             CursorSnowflake = 100L,
         });
 
         var exists = await sagaHarness.Exists(
             ExpectedCorrelationId, m => m.Syncing, TimeSpan.FromSeconds(5));
-        exists.ShouldNotBeNull("Saga should re-enter Syncing on second ChannelSyncRequested");
+        exists.ShouldNotBeNull("Saga should re-enter Syncing on second ChannelSyncDue");
 
         // IsCaughtUpAtLastPoll must be cleared when re-entering Syncing
         var saga = sagaHarness.Sagas.Contains(ExpectedCorrelationId);
@@ -178,10 +178,10 @@ public sealed class ChannelSagaStateMachineTests
 
         var sagaHarness = harness.GetSagaStateMachineHarness<ChannelSagaStateMachine, ChannelSagaState>();
 
-        await harness.Bus.Publish<ChannelSyncRequested>(new
+        await harness.Bus.Publish<ChannelSyncDue>(new
         {
             ChannelId = TestChannelId, GuildId = TestGuildId,
-            CurrentState = "Initial", LastUpdatedAt = DateTimeOffset.UtcNow,
+            CurrentState = "Initial", UpdatedOn = DateTimeOffset.UtcNow,
             CursorSnowflake = (long?)null,
         });
         await sagaHarness.Exists(ExpectedCorrelationId, m => m.Syncing, TimeSpan.FromSeconds(5));
@@ -189,17 +189,17 @@ public sealed class ChannelSagaStateMachineTests
         await harness.Bus.Publish<ChannelSyncCompleted>(new
         {
             ChannelId = TestChannelId, GuildId = TestGuildId,
-            CurrentState = "CaughtUp", LastUpdatedAt = DateTimeOffset.UtcNow,
+            CurrentState = "CaughtUp", UpdatedOn = DateTimeOffset.UtcNow,
             Name = "general", ChannelType = 0, ParentId = (long?)null,
             LastSyncedSnowflake = 500L, MessageCount = 10, IsCaughtUpAtLastPoll = false,
         });
         await sagaHarness.Exists(ExpectedCorrelationId, m => m.CaughtUp, TimeSpan.FromSeconds(5));
 
         // Second cycle — re-enter Syncing then complete with a LOWER snowflake (e.g. empty pass)
-        await harness.Bus.Publish<ChannelSyncRequested>(new
+        await harness.Bus.Publish<ChannelSyncDue>(new
         {
             ChannelId = TestChannelId, GuildId = TestGuildId,
-            CurrentState = "CaughtUp", LastUpdatedAt = DateTimeOffset.UtcNow,
+            CurrentState = "CaughtUp", UpdatedOn = DateTimeOffset.UtcNow,
             CursorSnowflake = 500L,
         });
         await sagaHarness.Exists(ExpectedCorrelationId, m => m.Syncing, TimeSpan.FromSeconds(5));
@@ -207,7 +207,7 @@ public sealed class ChannelSagaStateMachineTests
         await harness.Bus.Publish<ChannelSyncCompleted>(new
         {
             ChannelId = TestChannelId, GuildId = TestGuildId,
-            CurrentState = "CaughtUp", LastUpdatedAt = DateTimeOffset.UtcNow,
+            CurrentState = "CaughtUp", UpdatedOn = DateTimeOffset.UtcNow,
             Name = "general", ChannelType = 0, ParentId = (long?)null,
             LastSyncedSnowflake = 0L,   // empty pass; no new messages
             MessageCount = 0, IsCaughtUpAtLastPoll = true,
@@ -221,11 +221,11 @@ public sealed class ChannelSagaStateMachineTests
     }
 
     // ---------------------------------------------------------------------------
-    // Duplicate SyncRequested while Syncing is silently ignored (WARNING 3)
+    // Duplicate SyncDue while Syncing is silently ignored (WARNING 3)
     // ---------------------------------------------------------------------------
 
     [Test]
-    public async Task DuplicateSyncRequestedWhileSyncing_IsIgnoredNotFaulted()
+    public async Task DuplicateSyncDueWhileSyncing_IsIgnoredNotFaulted()
     {
         var clock = Substitute.For<ISystemClock>();
         clock.UtcNow.Returns(DateTimeOffset.UtcNow);
@@ -236,29 +236,170 @@ public sealed class ChannelSagaStateMachineTests
 
         var sagaHarness = harness.GetSagaStateMachineHarness<ChannelSagaStateMachine, ChannelSagaState>();
 
-        // First SyncRequested → Syncing
-        await harness.Bus.Publish<ChannelSyncRequested>(new
+        // First SyncDue → Syncing
+        await harness.Bus.Publish<ChannelSyncDue>(new
         {
             ChannelId = TestChannelId, GuildId = TestGuildId,
-            CurrentState = "Initial", LastUpdatedAt = DateTimeOffset.UtcNow,
+            CurrentState = "Initial", UpdatedOn = DateTimeOffset.UtcNow,
             CursorSnowflake = (long?)null,
         });
         await sagaHarness.Exists(ExpectedCorrelationId, m => m.Syncing, TimeSpan.FromSeconds(5));
 
-        // Second SyncRequested while still in Syncing — should not fault or throw
-        await harness.Bus.Publish<ChannelSyncRequested>(new
+        // Second SyncDue while still in Syncing — should not fault or throw
+        await harness.Bus.Publish<ChannelSyncDue>(new
         {
             ChannelId = TestChannelId, GuildId = TestGuildId,
-            CurrentState = "Syncing", LastUpdatedAt = DateTimeOffset.UtcNow,
+            CurrentState = "Syncing", UpdatedOn = DateTimeOffset.UtcNow,
             CursorSnowflake = 100L,
         });
 
         // Saga must still be in Syncing, not faulted
         var exists = await sagaHarness.Exists(ExpectedCorrelationId, m => m.Syncing, TimeSpan.FromSeconds(5));
-        exists.ShouldNotBeNull("Saga should remain in Syncing after duplicate ChannelSyncRequested");
+        exists.ShouldNotBeNull("Saga should remain in Syncing after duplicate ChannelSyncDue");
 
         // No faulted messages
         harness.Published.Select<Fault>().ShouldBeEmpty("No fault should be published for a duplicate Syncing request");
+    }
+
+    // ---------------------------------------------------------------------------
+    // PinPollDue while Syncing is silently dropped — no fault, saga stays Syncing
+    // ---------------------------------------------------------------------------
+
+    [Test]
+    public async Task PinPollDueWhileSyncing_IsSilentlyDropped_SagaStaysSyncing()
+    {
+        var clock = Substitute.For<ISystemClock>();
+        clock.UtcNow.Returns(DateTimeOffset.UtcNow);
+
+        await using var provider = BuildProvider(clock);
+        var harness = provider.GetTestHarness();
+        await harness.Start();
+
+        var sagaHarness = harness.GetSagaStateMachineHarness<ChannelSagaStateMachine, ChannelSagaState>();
+
+        // Drive to Syncing and stay there (no SyncCompleted)
+        await harness.Bus.Publish<ChannelSyncDue>(new
+        {
+            ChannelId = TestChannelId, GuildId = TestGuildId,
+            CurrentState = "Initial", UpdatedOn = DateTimeOffset.UtcNow,
+            CursorSnowflake = (long?)null,
+        });
+        await sagaHarness.Exists(ExpectedCorrelationId, m => m.Syncing, TimeSpan.FromSeconds(5));
+
+        // Publish PinPollDue directly while the saga is stuck in Syncing
+        await harness.Bus.Publish<PinPollDue>(new
+        {
+            ChannelId = TestChannelId,
+            GuildId = TestGuildId,
+            CurrentState = "Syncing",
+            DueAt = DateTimeOffset.UtcNow,
+            UpdatedOn = DateTimeOffset.UtcNow,
+        });
+
+        await Task.Delay(300);
+
+        // Saga must still be in Syncing, not faulted
+        var saga = sagaHarness.Sagas.Contains(ExpectedCorrelationId);
+        saga.ShouldNotBeNull();
+        saga.CurrentState.ShouldBe("Syncing", "PinPollDue while Syncing must be dropped, not faulted");
+        harness.Published.Select<Fault>().ShouldBeEmpty();
+    }
+
+    // ---------------------------------------------------------------------------
+    // ChannelChanged(IsPresent=false) from any state sets saga.IsPresent=false
+    // ---------------------------------------------------------------------------
+
+    [Test]
+    public async Task ChannelChanged_IsPresentFalse_WhileSyncing_SetsSagaIsPresentFalse()
+    {
+        var clock = Substitute.For<ISystemClock>();
+        clock.UtcNow.Returns(DateTimeOffset.UtcNow);
+
+        await using var provider = BuildProvider(clock);
+        var harness = provider.GetTestHarness();
+        await harness.Start();
+
+        var sagaHarness = harness.GetSagaStateMachineHarness<ChannelSagaStateMachine, ChannelSagaState>();
+
+        await harness.Bus.Publish<ChannelSyncDue>(new
+        {
+            ChannelId = TestChannelId, GuildId = TestGuildId,
+            CurrentState = "Initial", UpdatedOn = DateTimeOffset.UtcNow,
+            CursorSnowflake = (long?)null,
+        });
+        await sagaHarness.Exists(ExpectedCorrelationId, m => m.Syncing, TimeSpan.FromSeconds(5));
+
+        await harness.Bus.Publish<ChannelChanged>(new
+        {
+            ChannelId = TestChannelId,
+            GuildId = TestGuildId,
+            Name = string.Empty,
+            Topic = (string?)null,
+            ChannelType = 0,
+            ParentId = (long?)null,
+            IsPresent = false,
+            CurrentState = "Inaccessible",
+            UpdatedOn = DateTimeOffset.UtcNow,
+        });
+
+        await Task.Delay(300);
+
+        var saga = sagaHarness.Sagas.Contains(ExpectedCorrelationId);
+        saga.ShouldNotBeNull();
+        saga.IsPresent.ShouldBeFalse("ChannelChanged(IsPresent=false) while Syncing must flip saga.IsPresent");
+        // Still in Syncing — ChannelChanged alone does not transition state
+        saga.CurrentState.ShouldBe("Syncing");
+    }
+
+    [Test]
+    public async Task ChannelChanged_IsPresentFalse_WhileCaughtUp_SetsSagaIsPresentFalse()
+    {
+        var clock = Substitute.For<ISystemClock>();
+        clock.UtcNow.Returns(DateTimeOffset.UtcNow);
+
+        await using var provider = BuildProvider(clock);
+        var harness = provider.GetTestHarness();
+        await harness.Start();
+
+        var sagaHarness = harness.GetSagaStateMachineHarness<ChannelSagaStateMachine, ChannelSagaState>();
+
+        // Drive to CaughtUp
+        await harness.Bus.Publish<ChannelSyncDue>(new
+        {
+            ChannelId = TestChannelId, GuildId = TestGuildId,
+            CurrentState = "Initial", UpdatedOn = DateTimeOffset.UtcNow,
+            CursorSnowflake = (long?)null,
+        });
+        await sagaHarness.Exists(ExpectedCorrelationId, m => m.Syncing, TimeSpan.FromSeconds(5));
+
+        await harness.Bus.Publish<ChannelSyncCompleted>(new
+        {
+            ChannelId = TestChannelId, GuildId = TestGuildId,
+            CurrentState = "CaughtUp", UpdatedOn = DateTimeOffset.UtcNow,
+            Name = "general", ChannelType = 0, ParentId = (long?)null,
+            LastSyncedSnowflake = 100L, MessageCount = 3, IsCaughtUpAtLastPoll = true,
+        });
+        await sagaHarness.Exists(ExpectedCorrelationId, m => m.CaughtUp, TimeSpan.FromSeconds(5));
+
+        await harness.Bus.Publish<ChannelChanged>(new
+        {
+            ChannelId = TestChannelId,
+            GuildId = TestGuildId,
+            Name = string.Empty,
+            Topic = (string?)null,
+            ChannelType = 0,
+            ParentId = (long?)null,
+            IsPresent = false,
+            CurrentState = "Inaccessible",
+            UpdatedOn = DateTimeOffset.UtcNow,
+        });
+
+        await Task.Delay(300);
+
+        var saga = sagaHarness.Sagas.Contains(ExpectedCorrelationId);
+        saga.ShouldNotBeNull();
+        saga.IsPresent.ShouldBeFalse();
+        saga.CurrentState.ShouldBe("CaughtUp");
     }
 
     // ---------------------------------------------------------------------------

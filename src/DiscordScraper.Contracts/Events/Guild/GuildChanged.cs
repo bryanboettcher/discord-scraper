@@ -11,4 +11,10 @@ public interface GuildChanged : BaseGuildEvent
     /// mentionable target; the @everyone mention path uses a separate MentionKind.
     /// </summary>
     IReadOnlyList<GuildRole> Roles { get; }
+
+    /// <summary>
+    /// False when the bot received 403 or 404 for this guild, indicating the bot was removed
+    /// or the guild was deleted. Defaults to true so existing publishers don't need to set it.
+    /// </summary>
+    bool IsPresent { get; }
 }

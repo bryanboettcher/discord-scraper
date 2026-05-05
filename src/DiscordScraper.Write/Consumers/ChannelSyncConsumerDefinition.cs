@@ -12,7 +12,7 @@ namespace DiscordScraper.Write.Consumers;
 /// Partitioning: 16 virtual partitions keyed on ChannelId route same-channel syncs to the same
 /// partition; combined with ConcurrentMessageLimit=1 this serialises per-channel processing.
 /// True per-channel queues are unnecessary because SyncSchedulerService fires at most one
-/// ChannelSyncRequested per channel per tick. <para/>
+/// ChannelSyncDue per channel per tick. <para/>
 ///
 /// Rate limiting: Discord's global bot rate limit is 50 req/s; the limiter is per-endpoint per-process,
 /// so divide across pods when scaling. <para/>
@@ -37,7 +37,7 @@ public sealed class ChannelSyncConsumerDefinition : ConsumerDefinition<ChannelSy
         endpointConfigurator.PrefetchCount = 5;
 
         var partition = new Partitioner(16, new Murmur3UnsafeHashGenerator());
-        endpointConfigurator.UsePartitioner<ChannelSyncRequested>(
+        endpointConfigurator.UsePartitioner<ChannelSyncDue>(
             partition,
             m => DeterministicGuid.FromSnowflake(m.Message.ChannelId));
 

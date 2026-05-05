@@ -2,6 +2,7 @@ using DiscordScraper.Api.Admin;
 using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Contracts.Events.Channel;
 using DiscordScraper.Contracts.Events.Guild;
+using DiscordScraper.Contracts.Events.Message;
 using MassTransit;
 using Microsoft.AspNetCore.Mvc;
 
@@ -35,6 +36,9 @@ public static class AdminEndpoints
         group.MapGet("/sagas/messages/{messageSnowflake:long}", HandleGetMessageSaga)
             .Produces<MessageSagaSnapshot>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status404NotFound);
+
+        group.MapPost("/sagas/messages/replay-faulted", HandleReplayFaulted)
+            .Produces(StatusCodes.Status202Accepted);
     }
 
     private static async Task<IResult> HandleStats(
@@ -93,11 +97,11 @@ public static class AdminEndpoints
         ISystemClock clock,
         CancellationToken ct)
     {
-        await publish.Publish<GuildSyncRequested>(new
+        await publish.Publish<GuildSyncDue>(new
         {
             GuildId      = guildId,
             CurrentState = "Syncing",
-            LastUpdatedAt = clock.UtcNow,
+            UpdatedOn = clock.UtcNow,
         }, ct);
 
         return Results.Accepted();
@@ -114,13 +118,13 @@ public static class AdminEndpoints
         if (guildId is null)
             return Results.BadRequest("guildId query parameter required");
 
-        await publish.Publish<ChannelSyncRequested>(new
+        await publish.Publish<ChannelSyncDue>(new
         {
             ChannelId       = channelId,
             GuildId         = guildId.Value,
             CursorSnowflake = (long?)cursorSnowflake,
             CurrentState    = "Syncing",
-            LastUpdatedAt   = clock.UtcNow,
+            UpdatedOn   = clock.UtcNow,
         }, ct);
 
         return Results.Accepted();
@@ -133,5 +137,20 @@ public static class AdminEndpoints
     {
         var snapshot = await sagas.GetMessageSagaAsync(messageSnowflake, ct);
         return snapshot is null ? Results.NotFound() : Results.Ok(snapshot);
+    }
+
+    private static async Task<IResult> HandleReplayFaulted(
+        [FromQuery] string? phase,
+        IPublishEndpoint publish,
+        ISystemClock clock,
+        CancellationToken ct)
+    {
+        await publish.Publish<MessageReplayRequested>(new
+        {
+            Timestamp = clock.UtcNow,
+            Phase = phase,
+        }, ct);
+
+        return Results.Accepted();
     }
 }

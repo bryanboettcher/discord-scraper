@@ -8,11 +8,11 @@ namespace DiscordScraper.Write.Sagas;
 /// <summary>
 /// Tracks the sync lifecycle for a channel. No terminal state — channels are monitored for as
 /// long as they exist. The cursor (LastSyncedSnowflake) is stamped onto the next
-/// ChannelSyncRequested so the consumer can resume without querying Mongo directly.
+/// ChannelSyncDue so the consumer can resume without querying Mongo directly.
 /// </summary>
 /// <remarks>
 /// States: <c>Syncing</c> while a pass is in flight, <c>CaughtUp</c> once it completes.
-/// Re-receiving ChannelSyncRequested in CaughtUp re-enters Syncing (the steady-state loop
+/// Re-receiving ChannelSyncDue in CaughtUp re-enters Syncing (the steady-state loop
 /// driven by SyncSchedulerService). Pins are polled every <see cref="PinPollDelay"/> via
 /// <see cref="PinPollSchedule"/>; PinSetChanged updates PinSetCanonical and reschedules.
 /// </remarks>
@@ -25,9 +25,9 @@ public sealed class ChannelSagaStateMachine : MassTransitStateMachine<ChannelSag
     {
         InstanceState(x => x.CurrentState);
 
-        // InsertOnInitial=true: first ChannelSyncRequested upserts in one round-trip rather than
+        // InsertOnInitial=true: first ChannelSyncDue upserts in one round-trip rather than
         // insert-then-update, halving Mongo I/O during the initial backfill burst.
-        Event(() => SyncRequested, e =>
+        Event(() => SyncDue, e =>
         {
             e.CorrelateById(ctx => DeterministicGuid.FromSnowflake(ctx.Message.ChannelId));
             e.InsertOnInitial = true;
@@ -36,13 +36,20 @@ public sealed class ChannelSagaStateMachine : MassTransitStateMachine<ChannelSag
                 CorrelationId = DeterministicGuid.FromSnowflake(ctx.Message.ChannelId),
                 ChannelId = ctx.Message.ChannelId,
                 GuildId = ctx.Message.GuildId,
-                LastUpdatedAt = clock.UtcNow,
                 IsPresent = true,
             });
         });
 
         Event(() => SyncCompleted, e =>
             e.CorrelateById(ctx => DeterministicGuid.FromSnowflake(ctx.Message.ChannelId)));
+
+        Event(() => Changed, e =>
+        {
+            e.CorrelateById(ctx => DeterministicGuid.FromSnowflake(ctx.Message.ChannelId));
+            // ChannelChanged can arrive for a channel that has no saga yet (e.g. GuildSyncConsumer
+            // races ahead of ChannelSyncDue). Discard rather than creating a dangling saga.
+            e.OnMissingInstance(m => m.Discard());
+        });
 
         Event(() => PinSetChanged, e =>
             e.CorrelateById(ctx => DeterministicGuid.FromSnowflake(ctx.Message.ChannelId)));
@@ -57,31 +64,36 @@ public sealed class ChannelSagaStateMachine : MassTransitStateMachine<ChannelSag
         });
 
         Initially(
-            When(SyncRequested)
+            When(SyncDue)
                 .Then(ctx =>
                 {
                     ctx.Saga.ChannelId = ctx.Message.ChannelId;
                     ctx.Saga.GuildId = ctx.Message.GuildId;
                     ctx.Saga.CorrelationId = DeterministicGuid.FromSnowflake(ctx.Message.ChannelId);
-                    ctx.Saga.LastUpdatedAt = clock.UtcNow;
                 })
                 .TransitionTo(Syncing));
 
         During(CaughtUp,
-            When(SyncRequested)
+            When(SyncDue)
                 .Then(ctx =>
                 {
                     // The new pass will recompute IsCaughtUpAtLastPoll from its page size.
                     ctx.Saga.IsCaughtUpAtLastPoll = false;
-                    ctx.Saga.LastUpdatedAt = clock.UtcNow;
                 })
                 .TransitionTo(Syncing),
+
+            When(Changed)
+                .Then(ctx => ApplyChannelChanged(ctx.Saga, ctx.Message)),
+
+            // PinPollDue is consumed by PinPollConsumer for the actual fetch; the saga only
+            // needs to acknowledge the scheduled delivery so MT doesn't fault. PinSetChanged
+            // arrives separately and drives the cursor + reschedule.
+            When(PinPollSchedule.Received).Then(_ => { }),
 
             When(PinSetChanged)
                 .Then(ctx =>
                 {
                     ctx.Saga.PinSetCanonical = ctx.Message.CanonicalHash;
-                    ctx.Saga.LastUpdatedAt = clock.UtcNow;
                 })
                 .Schedule(PinPollSchedule, ctx => ctx.Init<PinPollDue>(new
                 {
@@ -89,14 +101,24 @@ public sealed class ChannelSagaStateMachine : MassTransitStateMachine<ChannelSag
                     ctx.Saga.GuildId,
                     CurrentState = ctx.Saga.CurrentState,
                     DueAt = clock.UtcNow.Add(PinPollDelay),
-                    LastUpdatedAt = clock.UtcNow,
+                    UpdatedOn = ctx.Saga.UpdatedOn,
                 })));
 
         During(Syncing,
-            // A second ChannelSyncRequested arriving while already syncing (e.g. scheduler fires
+            // A second ChannelSyncDue arriving while already syncing (e.g. scheduler fires
             // before the long backfill pass finishes) is silently dropped. Without this handler
             // MassTransit would fault the message to the DLQ on every slow-channel backfill.
-            When(SyncRequested).Then(_ => { }),
+            When(SyncDue).Then(_ => { }),
+
+            // ChannelChanged with IsPresent=false arrives before SyncCompleted when the channel
+            // is inaccessible. Mirror the flag immediately so the saga state is consistent.
+            When(Changed)
+                .Then(ctx => ApplyChannelChanged(ctx.Saga, ctx.Message)),
+
+            // PinPollDue can fire while we're stuck in Syncing (retries, slow backfill). There is
+            // no pin fetch to do while syncing; drop the message. When SyncCompleted eventually
+            // arrives it will schedule a fresh PinPollDue via the normal CaughtUp path.
+            When(PinPollSchedule.Received).Then(_ => { }),
 
             When(SyncCompleted)
                 .Then(ctx =>
@@ -113,25 +135,52 @@ public sealed class ChannelSagaStateMachine : MassTransitStateMachine<ChannelSag
                     ctx.Saga.IsCaughtUpAtLastPoll = ctx.Message.IsCaughtUpAtLastPoll;
                     ctx.Saga.LastSyncMessageCount = ctx.Message.MessageCount;
                     ctx.Saga.LastSyncedAt = clock.UtcNow;
-                    ctx.Saga.LastUpdatedAt = clock.UtcNow;
                 })
+                .Then(ctx => SettleSaga(ctx, clock))
                 .Schedule(PinPollSchedule, ctx => ctx.Init<PinPollDue>(new
                 {
                     ctx.Saga.ChannelId,
                     ctx.Saga.GuildId,
                     CurrentState = ctx.Saga.CurrentState,
                     DueAt = clock.UtcNow.Add(PinPollDelay),
-                    LastUpdatedAt = clock.UtcNow,
+                    UpdatedOn = ctx.Saga.UpdatedOn,
                 }))
                 .TransitionTo(CaughtUp));
+
+        // Catch-all: every event bumps UpdatedOn and initialises CreatedOn once.
+        During(
+            Initial, Syncing, CaughtUp,
+            When(SyncDue).Then(ctx => UpdateSaga(ctx, clock)),
+            When(SyncCompleted).Then(ctx => UpdateSaga(ctx, clock)),
+            When(Changed).Then(ctx => UpdateSaga(ctx, clock)),
+            When(PinSetChanged).Then(ctx => UpdateSaga(ctx, clock)),
+            When(PinPollSchedule.Received).Then(ctx => UpdateSaga(ctx, clock)));
     }
+
+    private static void ApplyChannelChanged(ChannelSagaState saga, ChannelChanged msg)
+    {
+        // Only ratchet to absent — presence is restored via admin action, not via event.
+        if (!msg.IsPresent)
+            saga.IsPresent = false;
+    }
+
+    private static void UpdateSaga(BehaviorContext<ChannelSagaState> ctx, ISystemClock clock)
+    {
+        var now = clock.UtcNow;
+        if (ctx.Saga.CreatedOn == default) ctx.Saga.CreatedOn = now;
+        ctx.Saga.UpdatedOn = now;
+    }
+
+    private static void SettleSaga(BehaviorContext<ChannelSagaState> ctx, ISystemClock clock)
+        => ctx.Saga.SettledOn = clock.UtcNow;
 
     // ReSharper disable UnassignedGetOnlyAutoProperty
     public State Syncing { get; private set; } = null!;
     public State CaughtUp { get; private set; } = null!;
 
-    public Event<ChannelSyncRequested> SyncRequested { get; private set; } = null!;
+    public Event<ChannelSyncDue> SyncDue { get; private set; } = null!;
     public Event<ChannelSyncCompleted> SyncCompleted { get; private set; } = null!;
+    public Event<ChannelChanged> Changed { get; private set; } = null!;
     public Event<PinSetChanged> PinSetChanged { get; private set; } = null!;
 
     public Schedule<ChannelSagaState, PinPollDue> PinPollSchedule { get; private set; } = null!;

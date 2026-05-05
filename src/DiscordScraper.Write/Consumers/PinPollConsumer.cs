@@ -58,7 +58,7 @@ public sealed class PinPollConsumer(
             CanonicalHash = canonical,
             PinCount = snapshots.Count,
             ObservedAt = observedAt,
-            LastUpdatedAt = observedAt,
+            UpdatedOn = observedAt,
         });
 
         // Publish MessageEditObserved for every pinned message that has been edited.
@@ -76,7 +76,7 @@ public sealed class PinPollConsumer(
                 CurrentState = "EditObserved",
                 EditedAt = msg.EditedAt!.Value,
                 UpdatedPayloadJson = msg.Payload,
-                LastUpdatedAt = observedAt,
+                UpdatedOn = observedAt,
             });
         }
 

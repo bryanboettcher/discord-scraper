@@ -12,22 +12,20 @@ namespace DiscordScraper.Read.Mapping;
 internal static class MessageRefExtractor
 {
     /// <summary>
-    /// Returns (references, attachments, embeds) extracted from the IR.
-    /// References cover: MentionNode (User/Role/Everyone/Here) and ChannelRefNode.
-    /// Attachments and embeds come from the IR's top-level lists.
+    /// Walks the IR body and extracts <see cref="MessageReference"/> rows for mentions and channel refs.
+    /// Ordinals are assigned by depth-first pre-order traversal — deterministic across re-projections.
     /// </summary>
-    internal static (
-        IReadOnlyList<MessageReference> References,
-        IReadOnlyList<MessageAttachment> Attachments,
-        IReadOnlyList<MessageEmbed> Embeds
-    ) Extract(long messageId, MessageIR ir)
+    internal static IReadOnlyList<MessageReference> ExtractReferences(long messageId, MessageIR ir)
     {
         var refs = new List<MessageReference>();
         short ordinal = 0;
-
         WalkNodes(ir.Body, messageId, refs, ref ordinal);
+        return refs;
+    }
 
-        var attachments = ir.Attachments
+    /// <summary>Projects the IR's top-level attachment list into <see cref="MessageAttachment"/> rows.</summary>
+    internal static IReadOnlyList<MessageAttachment> ExtractAttachments(long messageId, MessageIR ir) =>
+        ir.Attachments
             .Select(a => new MessageAttachment
             {
                 MessageId    = messageId,
@@ -38,7 +36,9 @@ internal static class MessageRefExtractor
             })
             .ToList();
 
-        var embeds = ir.Embeds
+    /// <summary>Projects the IR's top-level embed list into <see cref="MessageEmbed"/> rows.</summary>
+    internal static IReadOnlyList<MessageEmbed> ExtractEmbeds(long messageId, MessageIR ir) =>
+        ir.Embeds
             .Select(e => new MessageEmbed
             {
                 MessageId   = messageId,
@@ -49,9 +49,6 @@ internal static class MessageRefExtractor
                 Description = e.Description,
             })
             .ToList();
-
-        return (refs, attachments, embeds);
-    }
 
     private static void WalkNodes(
         IReadOnlyList<MessageNode> nodes,

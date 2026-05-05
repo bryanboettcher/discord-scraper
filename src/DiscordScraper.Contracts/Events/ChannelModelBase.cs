@@ -9,5 +9,8 @@ public interface ChannelModelBase : CorrelatedBy<Guid>, ITimestamped
     long GuildId { get; }
     string CurrentState { get; }
 
+    /// <summary>Timestamp of the last saga state transition that produced this event.</summary>
+    new DateTimeOffset UpdatedOn { get; }
+
     new Guid CorrelationId => DeterministicGuid.FromSnowflake(ChannelId);
 }

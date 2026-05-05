@@ -1,57 +1,44 @@
 using DiscordScraper.Contracts.Events.Message;
-using DiscordScraper.Contracts.IR;
-using DiscordScraper.Read.Data;
-using DiscordScraper.Read.Mapping;
-using Microsoft.EntityFrameworkCore;
+using DiscordScraper.Read.Data.Entities;
 using Microsoft.Extensions.Logging;
 
 namespace DiscordScraper.Read.Consumers;
 
 /// <summary>
-/// Batch consumer that projects MessageStateChanged events into the message read tables
-/// (read_messages, message_references, message_attachments, message_embeds, message_tags) in a
-/// single transaction per batch.
+/// Projects <see cref="MessageEnriched"/> events into <see cref="ReadMessage"/> rows.
+/// One of five per-table consumers that together fully project a <see cref="MessageEnriched"/>
+/// event onto the message read tables.
 /// </summary>
-/// <remarks>
-/// Subscription is on the base interface so the consumer sees every state-change subtype, but
-/// only <see cref="MessageEnriched"/> produces entities. Intermediate states (Projected, Enhanced,
-/// Indexed) and the Excluded terminal carry incomplete data and are silently skipped — projecting
-/// them would expose partial reads and churn upserts.
-/// </remarks>
-public sealed class MessageReadConsumer(
-    IDbContextFactory<ReadDbContext> factory,
-    IReadBulkWriter writer,
-    ILogger<MessageReadConsumer> logger)
-    : ReadModelBatchConsumer<MessageStateChanged>(factory, writer, logger)
-{
-    protected override IEnumerable<object> Project(MessageStateChanged evt) => evt switch
-    {
-        MessageEnriched enriched => ProjectFromEnriched(enriched),
-        _ => [],
-    };
+public sealed class ReadMessageProjectionConsumer(
+    IBatchProjector<MessageEnriched, ReadMessage> projector,
+    IBulkWriter<ReadMessage> writer,
+    ILogger<ReadMessageProjectionConsumer> logger)
+    : ReadModelBatchConsumer<MessageEnriched, ReadMessage>(projector, writer, logger);
 
-    private static IEnumerable<object> ProjectFromEnriched(MessageEnriched evt)
-    {
-        var snowflake = evt.MessageSnowflake;
-        var ir = evt.IR;
+/// <summary>Projects <see cref="MessageEnriched"/> events into <see cref="MessageReference"/> rows.</summary>
+public sealed class MessageReferenceProjectionConsumer(
+    IBatchProjector<MessageEnriched, MessageReference> projector,
+    IBulkWriter<MessageReference> writer,
+    ILogger<MessageReferenceProjectionConsumer> logger)
+    : ReadModelBatchConsumer<MessageEnriched, MessageReference>(projector, writer, logger);
 
-        var msg = MessageReadModelMapper.ToReadMessage(evt);
-        msg.PlainText      = IrTextFlattener.Flatten(ir);
-        msg.HasCode        = MessageRefExtractor.HasCode(ir.Body);
-        msg.HasAttachments = ir.Attachments.Count > 0;
-        msg.HasEmbeds      = ir.Embeds.Count > 0;
-        // ReplyToId is derived from the IR's ReplyTo context, not a top-level event property.
-        msg.ReplyToId      = ir.ReplyTo?.ReplyToMessageId;
+/// <summary>Projects <see cref="MessageEnriched"/> events into <see cref="MessageAttachment"/> rows.</summary>
+public sealed class MessageAttachmentProjectionConsumer(
+    IBatchProjector<MessageEnriched, MessageAttachment> projector,
+    IBulkWriter<MessageAttachment> writer,
+    ILogger<MessageAttachmentProjectionConsumer> logger)
+    : ReadModelBatchConsumer<MessageEnriched, MessageAttachment>(projector, writer, logger);
 
-        yield return msg;
+/// <summary>Projects <see cref="MessageEnriched"/> events into <see cref="MessageEmbed"/> rows.</summary>
+public sealed class MessageEmbedProjectionConsumer(
+    IBatchProjector<MessageEnriched, MessageEmbed> projector,
+    IBulkWriter<MessageEmbed> writer,
+    ILogger<MessageEmbedProjectionConsumer> logger)
+    : ReadModelBatchConsumer<MessageEnriched, MessageEmbed>(projector, writer, logger);
 
-        var (refs, attachments, embeds) = MessageRefExtractor.Extract(snowflake, ir);
-
-        foreach (var r in refs)        yield return r;
-        foreach (var a in attachments) yield return a;
-        foreach (var e in embeds)      yield return e;
-
-        foreach (var tag in MessageReadModelMapper.ToMessageTags(snowflake, evt.Tags))
-            yield return tag;
-    }
-}
+/// <summary>Projects <see cref="MessageEnriched"/> events into <see cref="MessageTag"/> rows.</summary>
+public sealed class MessageTagProjectionConsumer(
+    IBatchProjector<MessageEnriched, MessageTag> projector,
+    IBulkWriter<MessageTag> writer,
+    ILogger<MessageTagProjectionConsumer> logger)
+    : ReadModelBatchConsumer<MessageEnriched, MessageTag>(projector, writer, logger);

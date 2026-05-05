@@ -1,5 +1,4 @@
 using DiscordScraper.Contracts;
-using DiscordScraper.Contracts.Events;
 using MassTransit;
 
 namespace DiscordScraper.Write.Sagas;
@@ -9,7 +8,7 @@ namespace DiscordScraper.Write.Sagas;
 /// CorrelationId is deterministic from ChannelId so any node receiving a snowflake
 /// computes the same value without coordination.
 /// </summary>
-public sealed class ChannelSagaState : SagaStateMachineInstance, ISagaVersion, ITimestamped, ChannelModelBase
+public sealed class ChannelSagaState : SagaStateMachineInstance, ISagaVersion, ITimestamped
 {
     // MT Mongo repo requires parameterless ctor; all init done by the state machine.
     public ChannelSagaState() { }
@@ -24,7 +23,10 @@ public sealed class ChannelSagaState : SagaStateMachineInstance, ISagaVersion, I
 
     public long ChannelId { get; set; }
     public long GuildId { get; set; }
-    public DateTimeOffset LastUpdatedAt { get; set; }
+
+    public DateTimeOffset CreatedOn  { get; set; }
+    public DateTimeOffset UpdatedOn  { get; set; }
+    public DateTimeOffset? SettledOn  { get; set; }
 
     public string Name { get; set; } = string.Empty;
 
@@ -38,7 +40,7 @@ public sealed class ChannelSagaState : SagaStateMachineInstance, ISagaVersion, I
 
     /// <summary>
     /// Highest snowflake from the last completed sync pass. 0 means no sync has run yet.
-    /// Stamped onto the next ChannelSyncRequested so the consumer resumes without querying Mongo.
+    /// Stamped onto the next ChannelSyncDue so the consumer resumes without querying Mongo.
     /// </summary>
     public long LastSyncedSnowflake { get; set; }
 

@@ -1,5 +1,4 @@
 using DiscordScraper.Contracts;
-using DiscordScraper.Contracts.Events;
 using DiscordScraper.Contracts.IR;
 using MassTransit;
 
@@ -14,7 +13,7 @@ namespace DiscordScraper.Write.Sagas;
 /// the snowflake while MT saga correlation requires a Guid. Having both avoids the per-call
 /// DeterministicGuid.FromSnowflake() round-trip inside consumers.
 /// </summary>
-public sealed class MessageSagaState : SagaStateMachineInstance, ISagaVersion, ITimestamped, MessageModelBase
+public sealed class MessageSagaState : SagaStateMachineInstance, ISagaVersion, ITimestamped
 {
     // MT Mongo repo requires parameterless ctor; all init done by the state machine.
     public MessageSagaState() { }
@@ -40,7 +39,9 @@ public sealed class MessageSagaState : SagaStateMachineInstance, ISagaVersion, I
     public long AuthorId { get; set; }
     public bool AuthorIsBot { get; set; }
 
-    public DateTimeOffset LastUpdatedAt { get; set; }
+    public DateTimeOffset CreatedOn  { get; set; }
+    public DateTimeOffset UpdatedOn  { get; set; }
+    public DateTimeOffset? SettledOn  { get; set; }
 
     /// <summary>
     /// Verbatim Discord JSON captured at ingestion time. Held so the projector can rebuild the
@@ -60,22 +61,26 @@ public sealed class MessageSagaState : SagaStateMachineInstance, ISagaVersion, I
     /// </summary>
     public MessageIR? IR { get; set; }
 
-    // --- Enhancement output ---
-    public IReadOnlyList<string>? Tags { get; set; }
+    // --- Tag phase output (written by TagRequest.Completed — embedding vector) ---
     public float[]? Embedding { get; set; }
-    public DateTimeOffset? IndexedAt { get; set; }
 
     /// <summary>
-    /// Model version used for the most recent embedding. Stamped from EnhanceMessageResponse.
-    /// ReEmbeddingRequested matches sagas where this differs from the requested ModelVersion.
+    /// Model version used for the most recent embedding. Stamped from TagMessageResponse.
+    /// TagsInvalidated matches sagas where this differs from the requested ModelVersion
+    /// (re-embed when the embedding model upgrades).
     /// </summary>
     public string? EmbeddingModelVersion { get; set; }
 
+    // --- Classify phase output (written by ClassifyRequest.Completed — LLM tags + index timestamp) ---
+    public IReadOnlyList<string>? Tags { get; set; }
+    public DateTimeOffset? IndexedAt { get; set; }
+
     /// <summary>
-    /// Model version used for the most recent tagging pass. Stamped from EnhanceMessageResponse.
-    /// ReTagRequested matches sagas where this differs from the requested ModelVersion.
+    /// Model version used for the most recent classification pass. Stamped from
+    /// ClassifyMessageResponse. ClassificationInvalidated matches sagas where this differs from the
+    /// requested ModelVersion (re-classify when the LLM upgrades).
     /// </summary>
-    public string? TagModelVersion { get; set; }
+    public string? ClassifyModelVersion { get; set; }
 
     // --- Edit tracking ---
 
@@ -92,12 +97,12 @@ public sealed class MessageSagaState : SagaStateMachineInstance, ISagaVersion, I
     // --- Request correlation IDs (MT requires Guid? per Request declaration) ---
     public Guid? AnalyzeMessageRequestId { get; set; }
     public Guid? ProjectMessageRequestId { get; set; }
-    public Guid? EnhanceMessageRequestId { get; set; }
-    public Guid? IndexMessageRequestId { get; set; }
+    public Guid? TagRequestId { get; set; }
+    public Guid? ClassifyRequestId { get; set; }
 
     /// <summary>
     /// UTC creation time decoded from the snowflake on capture. Forwarded to
-    /// IndexMessageRequest.CreatedAt so the vector point carries the original message timestamp
+    /// ClassifyMessageRequest.CreatedAt so the vector point carries the original message timestamp
     /// without an extra round-trip.
     /// </summary>
     public DateTimeOffset MessageCreatedAt { get; set; }

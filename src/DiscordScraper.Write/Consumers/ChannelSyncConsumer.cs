@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net;
 using System.Text.Json;
 using DiscordScraper.Contracts;
 using DiscordScraper.Contracts.Clock;
@@ -15,7 +16,7 @@ namespace DiscordScraper.Write.Consumers;
 /// then publishes ChannelSyncCompleted to advance the saga cursor.
 /// </summary>
 /// <remarks>
-/// Cursor: <see cref="ChannelSyncRequested.CursorSnowflake"/> carries the last-known high-water
+/// Cursor: <see cref="ChannelSyncDue.CursorSnowflake"/> carries the last-known high-water
 /// mark, stamped by the saga when re-entering Syncing. Stateless consumer; no Mongo read at consume.
 /// Per-channel ordering: the consumer definition uses a Partitioner keyed on ChannelId combined
 /// with ConcurrentMessageLimit=1 so syncs for the same channel run serially.
@@ -23,14 +24,14 @@ namespace DiscordScraper.Write.Consumers;
 public sealed class ChannelSyncConsumer(
     IDiscordClient discord,
     ISystemClock clock,
-    ILogger<ChannelSyncConsumer> logger) : IConsumer<ChannelSyncRequested>
+    ILogger<ChannelSyncConsumer> logger) : IConsumer<ChannelSyncDue>
 {
     // Discord caps the messages-after response at 100. A short page signals caught-up.
     private const int PageSize = 100;
 
     private static readonly JsonDocumentOptions JsonOpts = new() { AllowTrailingCommas = true };
 
-    public async Task Consume(ConsumeContext<ChannelSyncRequested> context)
+    public async Task Consume(ConsumeContext<ChannelSyncDue> context)
     {
         var msg = context.Message;
         var ct = context.CancellationToken;
@@ -45,43 +46,82 @@ public sealed class ChannelSyncConsumer(
         var highestSnowflake = cursor;
         var messageCount = 0;
 
-        await foreach (var raw in discord.EnumerateChannelMessagesAsync(
-                           msg.ChannelId.ToString(), msg.GuildId, cursor, ct))
+        try
         {
-            if (raw.MessageId > highestSnowflake)
-                highestSnowflake = raw.MessageId;
-
-            var (authorId, authorIsBot) = ParseAuthor(raw.Payload);
-
-            // ChannelSyncRequested does not carry the channel display name — leave HomeChannelName
-            // null. ProjectMessageConsumer resolves it from the saga repo for cross-channel refs.
-            await context.Publish<MessageCaptured>(new
+            await foreach (var raw in discord.EnumerateChannelMessagesAsync(
+                               msg.ChannelId.ToString(), msg.GuildId, cursor, ct))
             {
-                MessageId = DeterministicGuid.FromSnowflake(raw.MessageId),
-                MessageSnowflake = raw.MessageId,
-                ChannelId = raw.ChannelId,
-                GuildId = raw.GuildId,
-                AuthorId = authorId,
-                CurrentState = "Captured",
-                LastUpdatedAt = raw.CreatedAt,
-                PayloadJson = raw.Payload,
-                AuthorIsBot = authorIsBot,
-                HomeChannelName = (string?)null,
+                if (raw.MessageId > highestSnowflake)
+                    highestSnowflake = raw.MessageId;
+
+                var (authorId, authorIsBot) = ParseAuthor(raw.Payload);
+
+                // ChannelSyncDue does not carry the channel display name — leave HomeChannelName
+                // null. ProjectMessageConsumer resolves it from the saga repo for cross-channel refs.
+                await context.Publish<MessageCaptured>(new
+                {
+                    MessageId = DeterministicGuid.FromSnowflake(raw.MessageId),
+                    MessageSnowflake = raw.MessageId,
+                    ChannelId = raw.ChannelId,
+                    GuildId = raw.GuildId,
+                    AuthorId = authorId,
+                    CurrentState = "Captured",
+                    UpdatedOn = raw.CreatedAt,
+                    PayloadJson = raw.Payload,
+                    AuthorIsBot = authorIsBot,
+                    HomeChannelName = (string?)null,
+                }, ct);
+
+                messageCount++;
+            }
+        }
+        catch (HttpRequestException ex) when (
+            ex.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.NotFound)
+        {
+            logger.LogWarning(
+                "Channel {ChannelId}: Discord returned {StatusCode} — marking not present",
+                msg.ChannelId, ex.StatusCode);
+
+            await context.Publish<ChannelChanged>(new
+            {
+                ChannelId = msg.ChannelId,
+                GuildId = msg.GuildId,
+                Name = string.Empty,
+                Topic = (string?)null,
+                ChannelType = 0,
+                ParentId = (long?)null,
+                IsPresent = false,
+                CurrentState = "Inaccessible",
+                UpdatedOn = clock.UtcNow,
             }, ct);
 
-            messageCount++;
+            await context.Publish<ChannelSyncCompleted>(new
+            {
+                ChannelId = msg.ChannelId,
+                GuildId = msg.GuildId,
+                CurrentState = "CaughtUp",
+                UpdatedOn = clock.UtcNow,
+                Name = string.Empty,
+                ChannelType = 0,
+                ParentId = (long?)null,
+                LastSyncedSnowflake = cursor,
+                MessageCount = 0,
+                IsCaughtUpAtLastPoll = true,
+            }, ct);
+
+            return;
         }
 
         var caughtUp = messageCount < PageSize;
 
-        // Channel identity fields (Name, ChannelType, ParentId) aren't on ChannelSyncRequested.
+        // Channel identity fields (Name, ChannelType, ParentId) aren't on ChannelSyncDue.
         // The saga keeps them as default until ChannelChanged events from GuildSyncConsumer arrive.
         await context.Publish<ChannelSyncCompleted>(new
         {
             ChannelId = msg.ChannelId,
             GuildId = msg.GuildId,
             CurrentState = "CaughtUp",
-            LastUpdatedAt = clock.UtcNow,
+            UpdatedOn = clock.UtcNow,
             Name = string.Empty,
             ChannelType = 0,
             ParentId = (long?)null,

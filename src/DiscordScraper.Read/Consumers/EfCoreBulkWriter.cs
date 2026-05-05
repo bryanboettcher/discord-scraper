@@ -2,63 +2,106 @@ using System.Reflection;
 using DiscordScraper.Read.Data;
 using EFCore.BulkExtensions;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Storage;
+using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.Extensions.Logging;
 
 namespace DiscordScraper.Read.Consumers;
 
 /// <summary>
-/// Dispatches BulkInsertOrUpdateAsync&lt;T&gt; for each entity type via MakeGenericMethod because
-/// EFCore.BulkExtensions exposes only a generic overload — no IList&lt;object&gt; entry point exists.
-/// The MethodInfo cache is module-level; MakeGenericMethod results are not cached because the
-/// closed methods are JIT-cached by the runtime after first call per type.
+/// <see cref="IBulkWriter{TEntity}"/> backed by EFCore.BulkExtensions. Manages its own
+/// <see cref="ReadDbContext"/> per call and is safe to resolve as scoped or singleton.
 /// </summary>
-internal sealed class EfCoreBulkWriter : IReadBulkWriter
+internal sealed class EfCoreBulkWriter<TEntity>(
+    IDbContextFactory<ReadDbContext> factory,
+    ILogger<EfCoreBulkWriter<TEntity>> logger)
+    : IBulkWriter<TEntity>
+    where TEntity : class
 {
-    // DbContextBulkExtensions.BulkInsertOrUpdateAsync<T>(DbContext, IEnumerable<T>, BulkConfig, Action<decimal>, Type, CancellationToken)
-    private static readonly MethodInfo _openUpsertMethod = FindOpenUpsertMethod();
-
-    public async Task WriteAsync(
-        ReadDbContext db,
-        IDbContextTransaction transaction,
-        IReadOnlyDictionary<Type, IList<object>> entitiesByType,
-        CancellationToken ct)
+    public async Task WriteAsync(IEnumerable<TEntity> entities, CancellationToken ct)
     {
-        foreach (var (entityType, boxedList) in entitiesByType)
+        var deduped = DedupeByPrimaryKey(entities);
+        if (deduped.Count == 0)
         {
-            // Build a properly-typed List<TEntity> so BulkExtensions' internal type assertion passes.
-            var typedList = BuildTypedList(entityType, boxedList);
-
-            var closedMethod = _openUpsertMethod.MakeGenericMethod(entityType);
-            var task = (Task)closedMethod.Invoke(
-                obj: null,
-                parameters: [db, typedList, null!, null!, null!, ct])!;
-
-            await task.ConfigureAwait(false);
+            logger.LogDebug("Batch produced no entities after dedup; skipping write. EntityType={EntityType}", typeof(TEntity).Name);
+            return;
         }
+
+        await using var db = await factory.CreateDbContextAsync(ct);
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        await db.BulkInsertOrUpdateAsync(deduped, cancellationToken: ct);
+        await tx.CommitAsync(ct);
     }
 
-    private static object BuildTypedList(Type entityType, IList<object> boxedList)
+    private List<TEntity> DedupeByPrimaryKey(IEnumerable<TEntity> entities)
     {
-        var typedListType = typeof(List<>).MakeGenericType(entityType);
-        var typedList = Activator.CreateInstance(typedListType, boxedList.Count)!;
-        var addMethod = typedListType.GetMethod("Add")!;
-        foreach (var item in boxedList)
-            addMethod.Invoke(typedList, [item]);
-        return typedList;
+        // Allocate a temporary context only to read PK metadata; never tracked, never saved.
+        using var db = factory.CreateDbContext();
+        var boxed = entities.Cast<object>().ToList();
+        var deduped = EfCoreBulkWriterStatics.DedupeByPrimaryKey(db, typeof(TEntity), boxed);
+        return deduped.Cast<TEntity>().ToList();
+    }
+}
+
+/// <summary>
+/// Static helpers for primary-key deduplication. Separated from the generic class so the
+/// logic can be tested directly via <see cref="EfCoreBulkWriterTests"/> through InternalsVisibleTo,
+/// and shared across the non-generic and generic code paths without duplication.
+/// </summary>
+internal static class EfCoreBulkWriterStatics
+{
+    internal static IList<object> DedupeByPrimaryKey(DbContext db, Type type, IList<object> entities)
+    {
+        var entityType = db.Model.FindEntityType(type)
+            ?? throw new InvalidOperationException($"{type.Name} is not registered in the DbContext model.");
+        var keyProps = entityType.FindPrimaryKey()?.Properties
+            ?? throw new InvalidOperationException($"{type.Name} has no primary key defined.");
+
+        // Dictionary preserves insertion order (.NET 5+); iterating in batch order means the last
+        // occurrence of a given PK naturally overwrites earlier ones — most-recent-wins.
+        var byKey = new Dictionary<object, object>();
+        foreach (var entity in entities)
+        {
+            var key = BuildKey(entity, keyProps);
+            byKey[key] = entity;
+        }
+
+        return byKey.Values.ToList();
     }
 
-    private static MethodInfo FindOpenUpsertMethod()
+    private static object BuildKey(object entity, IReadOnlyList<IReadOnlyProperty> keyProps)
     {
-        // Locate the overload: (DbContext, IEnumerable<T>, BulkConfig, Action<decimal>, Type, CancellationToken)
-        var method = typeof(DbContextBulkExtensions)
-            .GetMethods(BindingFlags.Public | BindingFlags.Static)
-            .Single(m =>
-                m.Name == nameof(DbContextBulkExtensions.BulkInsertOrUpdateAsync)
-                && m.IsGenericMethodDefinition
-                && m.GetParameters() is { Length: 6 } ps
-                && ps[2].ParameterType == typeof(BulkConfig)
-                && ps[5].ParameterType == typeof(CancellationToken));
+        if (keyProps.Count == 1)
+            return keyProps[0].PropertyInfo!.GetValue(entity)!;
 
-        return method;
+        // Composite PK: wrap in a ValueTupleKey so equality is value-based across the tuple.
+        var values = new object?[keyProps.Count];
+        for (var i = 0; i < keyProps.Count; i++)
+            values[i] = keyProps[i].PropertyInfo!.GetValue(entity);
+        return new ValueTupleKey(values);
+    }
+
+    /// <summary>
+    /// Equatable composite-key wrapper. ValueTuple generics require a fixed arity at compile time;
+    /// this covers arbitrary-width composite keys at the cost of a small allocation per entity.
+    /// </summary>
+    private sealed class ValueTupleKey
+    {
+        private readonly object?[] _values;
+
+        public ValueTupleKey(object?[] values) => _values = values;
+
+        public bool Equals(ValueTupleKey? other) =>
+            other is not null
+            && _values.Length == other._values.Length
+            && _values.Zip(other._values).All(p => Equals(p.First, p.Second));
+
+        public override bool Equals(object? obj) => Equals(obj as ValueTupleKey);
+
+        public override int GetHashCode()
+        {
+            var h = new HashCode();
+            foreach (var v in _values) h.Add(v);
+            return h.ToHashCode();
+        }
     }
 }

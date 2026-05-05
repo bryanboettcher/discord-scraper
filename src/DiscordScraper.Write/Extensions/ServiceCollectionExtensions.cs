@@ -1,5 +1,7 @@
+using DiscordScraper.Contracts.Configuration;
 using DiscordScraper.Write.Parsing;
 using DiscordScraper.Write.Repositories;
+using DiscordScraper.Write.Sagas;
 using DiscordScraper.Write.Scheduling;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -26,6 +28,15 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IChannelNameRepo, MongoChannelNameRepo>();
         services.AddSingleton<IChannelCursorRepo, MongoChannelCursorRepo>();
         services.AddSingleton<IGuildRoleNameRepo, MongoGuildRoleNameRepo>();
+
+        services.AddOptions<EnrichmentTagOptions>()
+            .BindConfiguration(EnrichmentTagOptions.SectionName);
+
+        services.AddOptions<EnrichmentClassifyOptions>()
+            .BindConfiguration(EnrichmentClassifyOptions.SectionName);
+
+        services.AddHostedService<SagaIndexInitializer>();
+
         return services;
     }
 }

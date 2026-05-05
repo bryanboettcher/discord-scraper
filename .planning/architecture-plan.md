@@ -511,15 +511,15 @@ Add OTel libraries in Phase 1; pays off as soon as multi-step sagas are running.
 
 ```
 TRIGGER
-  Polling: SyncScheduler → GuildSyncRequested
+  Polling: SyncScheduler → GuildSyncDue
   Gateway (Phase 8): DiscordGatewayConsumer → MessageCaptured directly
 
 POLLING PATH
-GuildSyncRequested
+GuildSyncDue
   → GuildSyncConsumer: fetch guild + channels + active threads
-  → ChannelSyncRequested per channel
+  → ChannelSyncDue per channel
 
-ChannelSyncRequested(channelId, guildId, cursor)
+ChannelSyncDue(channelId, guildId, cursor)
   → ChannelSyncConsumer (PrefetchCount=5, ConcurrentMessageLimit=1):
       • loads ChannelSaga
       • paginates Discord messages

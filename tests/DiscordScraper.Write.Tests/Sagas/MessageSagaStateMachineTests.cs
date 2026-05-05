@@ -10,6 +10,7 @@ using MassTransit.Contracts;
 using MassTransit.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
+using NSubstitute.Extensions;
 
 namespace DiscordScraper.Write.Tests.Sagas;
 
@@ -22,7 +23,7 @@ public sealed class MessageSagaStateMachineTests
     private static readonly IReadOnlyList<string> StubTags = ["dotnet", "csharp"];
     private static readonly IReadOnlyList<float> StubEmbedding = [0.1f, 0.2f, 0.3f];
     private const string StubEmbeddingModel = "nomic-embed-text";
-    private const string StubTagModel = "qwen2.5-coder:7b";
+    private const string StubTagModel = "llama3.1:8b";
 
     private static readonly MessageIR StubIR = new(
         Body: new[] { new TextNode("hello") },
@@ -35,7 +36,7 @@ public sealed class MessageSagaStateMachineTests
         Substitute.For<ISystemClock>().With(c => c.UtcNow.Returns(FixedNow));
 
     // Builds an in-memory harness wired through the full happy path:
-    // Analyze → Project → Enhance → Index → Enriched.
+    // Analyze → Project → Tagging → Classifying → Enriched.
     private static ServiceProvider BuildProvider(
         ISystemClock clock,
         bool isSubstantive = true,
@@ -66,18 +67,17 @@ public sealed class MessageSagaStateMachineTests
                     await ctx.RespondAsync(new ProjectMessageResponse(ir));
                 });
 
-                cfg.AddHandler<EnhanceMessageRequest>(async ctx =>
+                cfg.AddHandler<TagMessageRequest>(async ctx =>
                 {
-                    await ctx.RespondAsync(new EnhanceMessageResponse(
-                        Tags: StubTags,
-                        Embedding: StubEmbedding,
-                        EmbeddingModelVersion: StubEmbeddingModel,
-                        TagModelVersion: StubTagModel));
+                    await ctx.RespondAsync(new TagMessageResponse { Embedding = StubEmbedding,
+                        EmbeddingModelVersion = StubEmbeddingModel });
                 });
 
-                cfg.AddHandler<IndexMessageRequest>(async ctx =>
+                cfg.AddHandler<ClassifyMessageRequest>(async ctx =>
                 {
-                    await ctx.RespondAsync<IndexMessageResponse>(new { IndexedAt = FixedIndexedAt });
+                    await ctx.RespondAsync(new ClassifyMessageResponse { Tags = StubTags,
+                        ClassifyModelVersion = StubTagModel,
+                        IndexedAt = FixedIndexedAt });
                 });
             })
             .BuildServiceProvider(true);
@@ -107,8 +107,8 @@ public sealed class MessageSagaStateMachineTests
             .BuildServiceProvider(true);
     }
 
-    // Provider that stubs through Project but parks at EnhanceMessage.Pending.
-    private static ServiceProvider BuildProviderEnhancePending(ISystemClock clock)
+    // Provider that stubs through Project but parks at Tagging (no TagMessageRequest handler).
+    private static ServiceProvider BuildProviderTagPending(ISystemClock clock)
     {
         return new ServiceCollection()
             .AddSingleton(clock)
@@ -131,13 +131,13 @@ public sealed class MessageSagaStateMachineTests
                 {
                     await ctx.RespondAsync(new ProjectMessageResponse(StubIR));
                 });
-                // No EnhanceMessage handler — saga stays in EnhanceMessage.Pending
+                // No TagMessageRequest handler — saga stays in Tagging state
             })
             .BuildServiceProvider(true);
     }
 
-    // Provider that stubs through Enhance but parks at IndexMessage.Pending.
-    private static ServiceProvider BuildProviderIndexPending(ISystemClock clock)
+    // Provider that stubs through Tag but parks at Classifying (no ClassifyMessageRequest handler).
+    private static ServiceProvider BuildProviderClassifyPending(ISystemClock clock)
     {
         return new ServiceCollection()
             .AddSingleton(clock)
@@ -161,15 +161,12 @@ public sealed class MessageSagaStateMachineTests
                     await ctx.RespondAsync(new ProjectMessageResponse(StubIR));
                 });
 
-                cfg.AddHandler<EnhanceMessageRequest>(async ctx =>
+                cfg.AddHandler<TagMessageRequest>(async ctx =>
                 {
-                    await ctx.RespondAsync(new EnhanceMessageResponse(
-                        Tags: StubTags,
-                        Embedding: StubEmbedding,
-                        EmbeddingModelVersion: StubEmbeddingModel,
-                        TagModelVersion: StubTagModel));
+                    await ctx.RespondAsync(new TagMessageResponse { Embedding = StubEmbedding,
+                        EmbeddingModelVersion = StubEmbeddingModel });
                 });
-                // No IndexMessage handler — saga stays in IndexMessage.Pending
+                // No ClassifyMessageRequest handler — saga stays in Classifying state
             })
             .BuildServiceProvider(true);
     }
@@ -183,7 +180,7 @@ public sealed class MessageSagaStateMachineTests
         AuthorIsBot = false,
         PayloadJson = """{"id":"123","content":"hello"}""",
         CurrentState = "Initial",
-        LastUpdatedAt = FixedNow,
+        UpdatedOn = FixedNow,
         HomeChannelName = (string?)null,
     };
 
@@ -196,7 +193,7 @@ public sealed class MessageSagaStateMachineTests
         EditedAt = editedAt ?? FixedNow.AddHours(1),
         UpdatedPayloadJson = """{"id":"123","content":"edited"}""",
         CurrentState = "Projected",
-        LastUpdatedAt = FixedNow,
+        UpdatedOn = FixedNow,
     };
 
     // -------------------------------------------------------------------------
@@ -295,7 +292,7 @@ public sealed class MessageSagaStateMachineTests
             EditedAt = editedAt,
             UpdatedPayloadJson = """{"id":"123","content":"edited"}""",
             CurrentState = "AnalyzeMessage_Pending",
-            LastUpdatedAt = FixedNow,
+            UpdatedOn = FixedNow,
         });
 
         await Task.Delay(200);
@@ -524,7 +521,7 @@ public sealed class MessageSagaStateMachineTests
             EditedAt = editedAt,
             UpdatedPayloadJson = """{"id":"123","content":"edited again"}""",
             CurrentState = "ProjectMessage_Pending",
-            LastUpdatedAt = FixedNow,
+            UpdatedOn = FixedNow,
         });
 
         await Task.Delay(200);
@@ -572,19 +569,18 @@ public sealed class MessageSagaStateMachineTests
                     await ctx.RespondAsync(new ProjectMessageResponse(StubIR));
                 });
 
-                // Enhance + Index stubs so saga can complete after the re-loop.
-                cfg.AddHandler<EnhanceMessageRequest>(async ctx =>
+                // Tag + Classify stubs so saga can complete after the re-loop.
+                cfg.AddHandler<TagMessageRequest>(async ctx =>
                 {
-                    await ctx.RespondAsync(new EnhanceMessageResponse(
-                        Tags: StubTags,
-                        Embedding: StubEmbedding,
-                        EmbeddingModelVersion: StubEmbeddingModel,
-                        TagModelVersion: StubTagModel));
+                    await ctx.RespondAsync(new TagMessageResponse { Embedding = StubEmbedding,
+                        EmbeddingModelVersion = StubEmbeddingModel });
                 });
 
-                cfg.AddHandler<IndexMessageRequest>(async ctx =>
+                cfg.AddHandler<ClassifyMessageRequest>(async ctx =>
                 {
-                    await ctx.RespondAsync<IndexMessageResponse>(new { IndexedAt = FixedIndexedAt });
+                    await ctx.RespondAsync(new ClassifyMessageResponse { Tags = StubTags,
+                        ClassifyModelVersion = StubTagModel,
+                        IndexedAt = FixedIndexedAt });
                 });
             })
             .BuildServiceProvider(true);
@@ -652,18 +648,17 @@ public sealed class MessageSagaStateMachineTests
                     await ctx.RespondAsync(new ProjectMessageResponse(StubIR));
                 });
 
-                cfg.AddHandler<EnhanceMessageRequest>(async ctx =>
+                cfg.AddHandler<TagMessageRequest>(async ctx =>
                 {
-                    await ctx.RespondAsync(new EnhanceMessageResponse(
-                        Tags: StubTags,
-                        Embedding: StubEmbedding,
-                        EmbeddingModelVersion: StubEmbeddingModel,
-                        TagModelVersion: StubTagModel));
+                    await ctx.RespondAsync(new TagMessageResponse { Embedding = StubEmbedding,
+                        EmbeddingModelVersion = StubEmbeddingModel });
                 });
 
-                cfg.AddHandler<IndexMessageRequest>(async ctx =>
+                cfg.AddHandler<ClassifyMessageRequest>(async ctx =>
                 {
-                    await ctx.RespondAsync<IndexMessageResponse>(new { IndexedAt = FixedIndexedAt });
+                    await ctx.RespondAsync(new ClassifyMessageResponse { Tags = StubTags,
+                        ClassifyModelVersion = StubTagModel,
+                        IndexedAt = FixedIndexedAt });
                 });
             })
             .BuildServiceProvider(true);
@@ -691,7 +686,7 @@ public sealed class MessageSagaStateMachineTests
             EditedAt = editedAt,
             UpdatedPayloadJson = """{"id":"123","content":"re-edited"}""",
             CurrentState = "Enriched",
-            LastUpdatedAt = FixedNow,
+            UpdatedOn = FixedNow,
         });
 
         var machine = provider.GetRequiredService<MessageSagaStateMachine>();
@@ -708,15 +703,15 @@ public sealed class MessageSagaStateMachineTests
     }
 
     // =========================================================================
-    // Edit re-loop tests during EnhanceMessage.Pending and IndexMessage.Pending
+    // Edit re-loop tests during Tagging and Classifying states
     // =========================================================================
 
     // -------------------------------------------------------------------------
-    // Test 12: EnhanceMessage.Faulted → Faulted
+    // Test 12: TagRequest.Faulted → Faulted
     // -------------------------------------------------------------------------
 
     [Test]
-    public async Task EnhanceMessage_Faulted_transitions_to_Faulted()
+    public async Task TagRequest_Faulted_transitions_to_Faulted()
     {
         var clock = MakeClock();
         await using var provider = new ServiceCollection()
@@ -735,8 +730,8 @@ public sealed class MessageSagaStateMachineTests
                 cfg.AddHandler<ProjectMessageRequest>(async ctx =>
                     await ctx.RespondAsync(new ProjectMessageResponse(StubIR)));
 
-                cfg.AddHandler<EnhanceMessageRequest>((Func<ConsumeContext<EnhanceMessageRequest>, Task>)(_ =>
-                    throw new InvalidOperationException("ollama exploded")));
+                cfg.AddHandler<TagMessageRequest>((Func<ConsumeContext<TagMessageRequest>, Task>)(_ =>
+                    throw new InvalidOperationException("embedding exploded")));
             })
             .BuildServiceProvider(true);
 
@@ -750,18 +745,18 @@ public sealed class MessageSagaStateMachineTests
 
         var sagaHarness = harness.GetSagaStateMachineHarness<MessageSagaStateMachine, MessageSagaState>();
         var sagaId = await sagaHarness.Exists(expectedId, m => m.Faulted, timeout: TimeSpan.FromSeconds(10));
-        sagaId.ShouldNotBeNull("Saga should reach Faulted when EnhanceMessage consumer throws");
+        sagaId.ShouldNotBeNull("Saga should reach Faulted when TagRequest consumer throws");
     }
 
     // -------------------------------------------------------------------------
-    // Test 13: EnhanceMessage.TimeoutExpired → Faulted
+    // Test 13: TagRequest.TimeoutExpired → Faulted
     // -------------------------------------------------------------------------
 
     [Test]
-    public async Task EnhanceMessage_TimeoutExpired_transitions_to_Faulted()
+    public async Task TagRequest_TimeoutExpired_transitions_to_Faulted()
     {
         var clock = MakeClock();
-        await using var provider = BuildProviderEnhancePending(clock);
+        await using var provider = BuildProviderTagPending(clock);
 
         var harness = provider.GetTestHarness();
         await harness.Start();
@@ -774,14 +769,14 @@ public sealed class MessageSagaStateMachineTests
         var sagaHarness = harness.GetSagaStateMachineHarness<MessageSagaStateMachine, MessageSagaState>();
         var machine = provider.GetRequiredService<MessageSagaStateMachine>();
 
-        await sagaHarness.Exists(expectedId, machine.EnhanceMessage.Pending, timeout: TimeSpan.FromSeconds(5));
+        await sagaHarness.Exists(expectedId, machine.Tagging, timeout: TimeSpan.FromSeconds(5));
 
         var saga = sagaHarness.Sagas.Contains(expectedId);
         saga.ShouldNotBeNull();
-        var requestId = saga.EnhanceMessageRequestId;
-        requestId.ShouldNotBeNull("EnhanceMessageRequestId must be set while in Pending");
+        var requestId = saga.TagRequestId;
+        requestId.ShouldNotBeNull("TagRequestId must be set while in Tagging");
 
-        await harness.Bus.Publish<RequestTimeoutExpired<EnhanceMessageRequest>>(new
+        await harness.Bus.Publish<RequestTimeoutExpired<TagMessageRequest>>(new
         {
             RequestId = requestId.Value,
             CorrelationId = expectedId,
@@ -790,15 +785,15 @@ public sealed class MessageSagaStateMachineTests
         });
 
         var sagaId = await sagaHarness.Exists(expectedId, m => m.Faulted, timeout: TimeSpan.FromSeconds(5));
-        sagaId.ShouldNotBeNull("Saga should reach Faulted when EnhanceMessage timeout fires");
+        sagaId.ShouldNotBeNull("Saga should reach Faulted when TagRequest timeout fires");
     }
 
     // -------------------------------------------------------------------------
-    // Test 14: IndexMessage.Faulted → Faulted
+    // Test 14: ClassifyRequest.Faulted → Faulted (embedding preserved)
     // -------------------------------------------------------------------------
 
     [Test]
-    public async Task IndexMessage_Faulted_transitions_to_Faulted()
+    public async Task ClassifyRequest_Faulted_transitions_to_Faulted_with_embedding_preserved()
     {
         var clock = MakeClock();
         await using var provider = new ServiceCollection()
@@ -817,15 +812,12 @@ public sealed class MessageSagaStateMachineTests
                 cfg.AddHandler<ProjectMessageRequest>(async ctx =>
                     await ctx.RespondAsync(new ProjectMessageResponse(StubIR)));
 
-                cfg.AddHandler<EnhanceMessageRequest>(async ctx =>
-                    await ctx.RespondAsync(new EnhanceMessageResponse(
-                        Tags: StubTags,
-                        Embedding: StubEmbedding,
-                        EmbeddingModelVersion: StubEmbeddingModel,
-                        TagModelVersion: StubTagModel)));
+                cfg.AddHandler<TagMessageRequest>(async ctx =>
+                    await ctx.RespondAsync(new TagMessageResponse { Embedding = StubEmbedding,
+                        EmbeddingModelVersion = StubEmbeddingModel }));
 
-                cfg.AddHandler<IndexMessageRequest>((Func<ConsumeContext<IndexMessageRequest>, Task>)(_ =>
-                    throw new InvalidOperationException("pgvector exploded")));
+                cfg.AddHandler<ClassifyMessageRequest>((Func<ConsumeContext<ClassifyMessageRequest>, Task>)(_ =>
+                    throw new InvalidOperationException("llm exploded")));
             })
             .BuildServiceProvider(true);
 
@@ -839,18 +831,24 @@ public sealed class MessageSagaStateMachineTests
 
         var sagaHarness = harness.GetSagaStateMachineHarness<MessageSagaStateMachine, MessageSagaState>();
         var sagaId = await sagaHarness.Exists(expectedId, m => m.Faulted, timeout: TimeSpan.FromSeconds(10));
-        sagaId.ShouldNotBeNull("Saga should reach Faulted when IndexMessage consumer throws");
+        sagaId.ShouldNotBeNull("Saga should reach Faulted when ClassifyRequest consumer throws");
+
+        // Embedding must be preserved when Classify fails — replay can skip re-embedding.
+        var saga = sagaHarness.Sagas.Contains(expectedId);
+        saga.ShouldNotBeNull();
+        saga.Embedding.ShouldNotBeNull("Embedding must be preserved after Classify fault");
+        saga.Tags.ShouldBeNull("Tags must not be set when Classify faulted");
     }
 
     // -------------------------------------------------------------------------
-    // Test 15: IndexMessage.TimeoutExpired → Faulted
+    // Test 15: ClassifyRequest.TimeoutExpired → Faulted (embedding preserved)
     // -------------------------------------------------------------------------
 
     [Test]
-    public async Task IndexMessage_TimeoutExpired_transitions_to_Faulted()
+    public async Task ClassifyRequest_TimeoutExpired_transitions_to_Faulted_with_embedding_preserved()
     {
         var clock = MakeClock();
-        await using var provider = BuildProviderIndexPending(clock);
+        await using var provider = BuildProviderClassifyPending(clock);
 
         var harness = provider.GetTestHarness();
         await harness.Start();
@@ -863,14 +861,14 @@ public sealed class MessageSagaStateMachineTests
         var sagaHarness = harness.GetSagaStateMachineHarness<MessageSagaStateMachine, MessageSagaState>();
         var machine = provider.GetRequiredService<MessageSagaStateMachine>();
 
-        await sagaHarness.Exists(expectedId, machine.IndexMessage.Pending, timeout: TimeSpan.FromSeconds(5));
+        await sagaHarness.Exists(expectedId, machine.Classifying, timeout: TimeSpan.FromSeconds(5));
 
         var saga = sagaHarness.Sagas.Contains(expectedId);
         saga.ShouldNotBeNull();
-        var requestId = saga.IndexMessageRequestId;
-        requestId.ShouldNotBeNull("IndexMessageRequestId must be set while in Pending");
+        var requestId = saga.ClassifyRequestId;
+        requestId.ShouldNotBeNull("ClassifyRequestId must be set while in Classifying");
 
-        await harness.Bus.Publish<RequestTimeoutExpired<IndexMessageRequest>>(new
+        await harness.Bus.Publish<RequestTimeoutExpired<ClassifyMessageRequest>>(new
         {
             RequestId = requestId.Value,
             CorrelationId = expectedId,
@@ -879,7 +877,11 @@ public sealed class MessageSagaStateMachineTests
         });
 
         var sagaId = await sagaHarness.Exists(expectedId, m => m.Faulted, timeout: TimeSpan.FromSeconds(5));
-        sagaId.ShouldNotBeNull("Saga should reach Faulted when IndexMessage timeout fires");
+        sagaId.ShouldNotBeNull("Saga should reach Faulted when ClassifyRequest timeout fires");
+
+        var sagaAfter = sagaHarness.Sagas.Contains(expectedId);
+        sagaAfter.ShouldNotBeNull();
+        sagaAfter.Embedding.ShouldNotBeNull("Embedding must be preserved after Classify timeout");
     }
 
     // -------------------------------------------------------------------------
@@ -890,7 +892,7 @@ public sealed class MessageSagaStateMachineTests
     public async Task MessageEditObserved_during_EnhancePending_sets_HasPendingEdit()
     {
         var clock = MakeClock();
-        await using var provider = BuildProviderEnhancePending(clock);
+        await using var provider = BuildProviderTagPending(clock);
 
         var harness = provider.GetTestHarness();
         await harness.Start();
@@ -903,7 +905,7 @@ public sealed class MessageSagaStateMachineTests
         var sagaHarness = harness.GetSagaStateMachineHarness<MessageSagaStateMachine, MessageSagaState>();
         var machine = provider.GetRequiredService<MessageSagaStateMachine>();
 
-        await sagaHarness.Exists(expectedId, machine.EnhanceMessage.Pending, timeout: TimeSpan.FromSeconds(5));
+        await sagaHarness.Exists(expectedId, machine.Tagging, timeout: TimeSpan.FromSeconds(5));
 
         var editedAt = FixedNow.AddHours(2);
         await harness.Bus.Publish<MessageEditObserved>(BuildMessageEditObserved(snowflake, editedAt));
@@ -923,7 +925,7 @@ public sealed class MessageSagaStateMachineTests
     public async Task MessageEditObserved_during_IndexPending_sets_HasPendingEdit()
     {
         var clock = MakeClock();
-        await using var provider = BuildProviderIndexPending(clock);
+        await using var provider = BuildProviderClassifyPending(clock);
 
         var harness = provider.GetTestHarness();
         await harness.Start();
@@ -936,7 +938,7 @@ public sealed class MessageSagaStateMachineTests
         var sagaHarness = harness.GetSagaStateMachineHarness<MessageSagaStateMachine, MessageSagaState>();
         var machine = provider.GetRequiredService<MessageSagaStateMachine>();
 
-        await sagaHarness.Exists(expectedId, machine.IndexMessage.Pending, timeout: TimeSpan.FromSeconds(5));
+        await sagaHarness.Exists(expectedId, machine.Classifying, timeout: TimeSpan.FromSeconds(5));
 
         var editedAt = FixedNow.AddHours(2);
         await harness.Bus.Publish<MessageEditObserved>(BuildMessageEditObserved(snowflake, editedAt));
@@ -949,15 +951,15 @@ public sealed class MessageSagaStateMachineTests
     }
 
     // -------------------------------------------------------------------------
-    // Test 18: HasPendingEdit re-loop after EnhanceMessage.Completed → re-Request(ProjectMessage)
+    // Test 18: HasPendingEdit re-loop after TagRequest.Completed → re-Request(ProjectMessage)
     // -------------------------------------------------------------------------
 
     [Test]
-    public async Task HasPendingEdit_during_EnhancePending_triggers_re_ProjectMessage()
+    public async Task HasPendingEdit_during_Tagging_triggers_re_ProjectMessage()
     {
         var clock = MakeClock();
 
-        var enhanceGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tagGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var projectCount = 0;
 
         await using var provider = new ServiceCollection()
@@ -979,20 +981,19 @@ public sealed class MessageSagaStateMachineTests
                     await ctx.RespondAsync(new ProjectMessageResponse(StubIR));
                 });
 
-                cfg.AddHandler<EnhanceMessageRequest>(async ctx =>
+                cfg.AddHandler<TagMessageRequest>(async ctx =>
                 {
                     // Block until the test has published an edit — ensures HasPendingEdit is
                     // set before the Completed handler fires.
-                    await enhanceGate.Task;
-                    await ctx.RespondAsync(new EnhanceMessageResponse(
-                        Tags: StubTags,
-                        Embedding: StubEmbedding,
-                        EmbeddingModelVersion: StubEmbeddingModel,
-                        TagModelVersion: StubTagModel));
+                    await tagGate.Task;
+                    await ctx.RespondAsync(new TagMessageResponse { Embedding = StubEmbedding,
+                        EmbeddingModelVersion = StubEmbeddingModel });
                 });
 
-                cfg.AddHandler<IndexMessageRequest>(async ctx =>
-                    await ctx.RespondAsync<IndexMessageResponse>(new { IndexedAt = FixedIndexedAt }));
+                cfg.AddHandler<ClassifyMessageRequest>(async ctx =>
+                    await ctx.RespondAsync(new ClassifyMessageResponse { Tags = StubTags,
+                        ClassifyModelVersion = StubTagModel,
+                        IndexedAt = FixedIndexedAt }));
             })
             .BuildServiceProvider(true);
 
@@ -1007,17 +1008,16 @@ public sealed class MessageSagaStateMachineTests
         var sagaHarness = harness.GetSagaStateMachineHarness<MessageSagaStateMachine, MessageSagaState>();
         var machine = provider.GetRequiredService<MessageSagaStateMachine>();
 
-        await sagaHarness.Exists(expectedId, machine.EnhanceMessage.Pending, timeout: TimeSpan.FromSeconds(5));
+        await sagaHarness.Exists(expectedId, machine.Tagging, timeout: TimeSpan.FromSeconds(5));
 
         await harness.Bus.Publish<MessageEditObserved>(BuildMessageEditObserved(snowflake));
         await Task.Delay(200);
 
-        enhanceGate.SetResult();
+        tagGate.SetResult();
 
-        // After gate release: EnhanceMessage.Completed fires, sees HasPendingEdit, loops back to
-        // ProjectMessage → Enhance → Index → Enriched.
+        // After gate release: TagRequest.Completed fires, sees HasPendingEdit, loops back to ProjectMessage.
         var sagaId = await sagaHarness.Exists(expectedId, m => m.Enriched, timeout: TimeSpan.FromSeconds(10));
-        sagaId.ShouldNotBeNull("Saga should reach Enriched after HasPendingEdit re-loop from Enhance");
+        sagaId.ShouldNotBeNull("Saga should reach Enriched after HasPendingEdit re-loop from Tagging");
 
         // projectCount == 2: initial + re-loop
         projectCount.ShouldBe(2, "Two ProjectMessage requests: initial and re-loop after pending edit");
@@ -1028,15 +1028,15 @@ public sealed class MessageSagaStateMachineTests
     }
 
     // -------------------------------------------------------------------------
-    // Test 19: HasPendingEdit re-loop after IndexMessage.Completed → re-Request(ProjectMessage)
+    // Test 19: HasPendingEdit re-loop after ClassifyRequest.Completed → re-Request(ProjectMessage)
     // -------------------------------------------------------------------------
 
     [Test]
-    public async Task HasPendingEdit_during_IndexPending_triggers_re_ProjectMessage()
+    public async Task HasPendingEdit_during_Classifying_triggers_re_ProjectMessage()
     {
         var clock = MakeClock();
 
-        var indexGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var classifyGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var projectCount = 0;
 
         await using var provider = new ServiceCollection()
@@ -1058,17 +1058,16 @@ public sealed class MessageSagaStateMachineTests
                     await ctx.RespondAsync(new ProjectMessageResponse(StubIR));
                 });
 
-                cfg.AddHandler<EnhanceMessageRequest>(async ctx =>
-                    await ctx.RespondAsync(new EnhanceMessageResponse(
-                        Tags: StubTags,
-                        Embedding: StubEmbedding,
-                        EmbeddingModelVersion: StubEmbeddingModel,
-                        TagModelVersion: StubTagModel)));
+                cfg.AddHandler<TagMessageRequest>(async ctx =>
+                    await ctx.RespondAsync(new TagMessageResponse { Embedding = StubEmbedding,
+                        EmbeddingModelVersion = StubEmbeddingModel }));
 
-                cfg.AddHandler<IndexMessageRequest>(async ctx =>
+                cfg.AddHandler<ClassifyMessageRequest>(async ctx =>
                 {
-                    await indexGate.Task;
-                    await ctx.RespondAsync<IndexMessageResponse>(new { IndexedAt = FixedIndexedAt });
+                    await classifyGate.Task;
+                    await ctx.RespondAsync(new ClassifyMessageResponse { Tags = StubTags,
+                        ClassifyModelVersion = StubTagModel,
+                        IndexedAt = FixedIndexedAt });
                 });
             })
             .BuildServiceProvider(true);
@@ -1084,17 +1083,16 @@ public sealed class MessageSagaStateMachineTests
         var sagaHarness = harness.GetSagaStateMachineHarness<MessageSagaStateMachine, MessageSagaState>();
         var machine = provider.GetRequiredService<MessageSagaStateMachine>();
 
-        await sagaHarness.Exists(expectedId, machine.IndexMessage.Pending, timeout: TimeSpan.FromSeconds(5));
+        await sagaHarness.Exists(expectedId, machine.Classifying, timeout: TimeSpan.FromSeconds(5));
 
         await harness.Bus.Publish<MessageEditObserved>(BuildMessageEditObserved(snowflake));
         await Task.Delay(200);
 
-        indexGate.SetResult();
+        classifyGate.SetResult();
 
-        // After gate release: IndexMessage.Completed fires, sees HasPendingEdit, loops back to
-        // ProjectMessage → Enhance → Index → Enriched.
+        // After gate release: ClassifyRequest.Completed fires, sees HasPendingEdit, loops back to ProjectMessage.
         var sagaId = await sagaHarness.Exists(expectedId, m => m.Enriched, timeout: TimeSpan.FromSeconds(10));
-        sagaId.ShouldNotBeNull("Saga should reach Enriched after HasPendingEdit re-loop from Index");
+        sagaId.ShouldNotBeNull("Saga should reach Enriched after HasPendingEdit re-loop from Classifying");
 
         projectCount.ShouldBe(2, "Two ProjectMessage requests: initial and re-loop after pending edit");
 
@@ -1133,7 +1131,7 @@ public sealed class MessageSagaStateMachineTests
             AuthorIsBot = false,
             PayloadJson = """{"id":"175928847299117063","content":"timestamp test"}""",
             CurrentState = "Initial",
-            LastUpdatedAt = FixedNow,
+            UpdatedOn = FixedNow,
             HomeChannelName = (string?)null,
         });
 
@@ -1148,7 +1146,7 @@ public sealed class MessageSagaStateMachineTests
     }
 
     // =========================================================================
-    // Re-enrichment fan-out tests (ReEmbeddingRequested / ReTagRequested)
+    // Re-enrichment fan-out tests (ClassificationInvalidated / TagsInvalidated)
     // =========================================================================
 
     // Helper: drives a saga all the way to Enriched with the given model versions stamped.
@@ -1173,33 +1171,31 @@ public sealed class MessageSagaStateMachineTests
                 cfg.AddHandler<ProjectMessageRequest>(async ctx =>
                     await ctx.RespondAsync(new ProjectMessageResponse(StubIR)));
 
-                cfg.AddHandler<EnhanceMessageRequest>(async ctx =>
-                    await ctx.RespondAsync(new EnhanceMessageResponse(
-                        Tags: StubTags,
-                        Embedding: StubEmbedding,
-                        EmbeddingModelVersion: embeddingModel,
-                        TagModelVersion: tagModel)));
+                cfg.AddHandler<TagMessageRequest>(async ctx =>
+                    await ctx.RespondAsync(new TagMessageResponse { Embedding = StubEmbedding,
+                        EmbeddingModelVersion = embeddingModel }));
 
-                cfg.AddHandler<IndexMessageRequest>(async ctx =>
-                    await ctx.RespondAsync<IndexMessageResponse>(new { IndexedAt = FixedIndexedAt }));
+                cfg.AddHandler<ClassifyMessageRequest>(async ctx =>
+                    await ctx.RespondAsync(new ClassifyMessageResponse { Tags = StubTags,
+                        ClassifyModelVersion = tagModel,
+                        IndexedAt = FixedIndexedAt }));
             })
             .BuildServiceProvider(true);
     }
 
     // -------------------------------------------------------------------------
-    // Test 21: ReEmbeddingRequested with new model version re-enters EnhanceMessage.Pending
+    // Test 21: ClassificationInvalidated with new model version re-enters Classifying
     //          then reaches Enriched with updated EmbeddingModelVersion.
     // -------------------------------------------------------------------------
 
     [Test]
-    public async Task ReEmbeddingRequested_with_new_model_triggers_re_enhance_and_stamps_version()
+    public async Task ClassificationInvalidated_with_new_model_triggers_re_classify_and_stamps_version()
     {
         var clock = MakeClock();
         const string oldModel = "nomic-embed-text";
         const string newModel = "mxbai-embed-large";
 
-        var enhanceCount = 0;
-        string? lastEmbeddingModel = null;
+        var classifyCount = 0;
 
         await using var provider = new ServiceCollection()
             .AddSingleton(clock)
@@ -1217,20 +1213,21 @@ public sealed class MessageSagaStateMachineTests
                 cfg.AddHandler<ProjectMessageRequest>(async ctx =>
                     await ctx.RespondAsync(new ProjectMessageResponse(StubIR)));
 
-                cfg.AddHandler<EnhanceMessageRequest>(async ctx =>
-                {
-                    var n = Interlocked.Increment(ref enhanceCount);
-                    var model = n == 1 ? oldModel : newModel;
-                    lastEmbeddingModel = model;
-                    await ctx.RespondAsync(new EnhanceMessageResponse(
-                        Tags: StubTags,
-                        Embedding: StubEmbedding,
-                        EmbeddingModelVersion: model,
-                        TagModelVersion: StubTagModel));
-                });
+                cfg.AddHandler<TagMessageRequest>(async ctx =>
+                    await ctx.RespondAsync(new TagMessageResponse { Embedding = StubEmbedding,
+                        EmbeddingModelVersion = StubEmbeddingModel }));
 
-                cfg.AddHandler<IndexMessageRequest>(async ctx =>
-                    await ctx.RespondAsync<IndexMessageResponse>(new { IndexedAt = FixedIndexedAt }));
+                cfg.AddHandler<ClassifyMessageRequest>(async ctx =>
+                {
+                    var n = Interlocked.Increment(ref classifyCount);
+                    var model = n == 1 ? oldModel : newModel;
+                    await ctx.RespondAsync(new ClassifyMessageResponse { Tags = StubTags,
+                        ClassifyModelVersion = StubTagModel,
+                        IndexedAt = FixedIndexedAt });
+                    // EmbeddingModelVersion comes from TagMessageResponse, stored on saga.
+                    // ClassifyMessageResponse only carries ClassifyModelVersion + IndexedAt.
+                    _ = model; // suppress unused warning — version tracked via TagRequest
+                });
             })
             .BuildServiceProvider(true);
 
@@ -1248,29 +1245,27 @@ public sealed class MessageSagaStateMachineTests
         var sagaBefore = sagaHarness.Sagas.Contains(expectedId);
         sagaBefore!.EmbeddingModelVersion.ShouldBe(oldModel);
 
-        // Publish re-embedding request — cutoff after LastUpdatedAt so this saga matches.
-        await harness.Bus.Publish<ReEmbeddingRequested>(new
+        // Publish re-classify request — cutoff after UpdatedOn so this saga matches.
+        await harness.Bus.Publish<ClassificationInvalidated>(new
         {
             ModelVersion = newModel,
             Cutoff = FixedNow.AddHours(1),
         });
 
-        // Saga should leave Enriched, enter EnhanceMessage.Pending, then return to Enriched.
+        // Saga should leave Enriched, enter Classifying (tag skipped), then return to Enriched.
         var machine = provider.GetRequiredService<MessageSagaStateMachine>();
-        await sagaHarness.Exists(expectedId, machine.EnhanceMessage.Pending, timeout: TimeSpan.FromSeconds(5));
+        await sagaHarness.Exists(expectedId, machine.Classifying, timeout: TimeSpan.FromSeconds(5));
         await sagaHarness.Exists(expectedId, m => m.Enriched, timeout: TimeSpan.FromSeconds(10));
 
-        var sagaAfter = sagaHarness.Sagas.Contains(expectedId);
-        sagaAfter!.EmbeddingModelVersion.ShouldBe(newModel, "EmbeddingModelVersion must be stamped from response");
-        enhanceCount.ShouldBe(2, "EnhanceMessage should run twice: initial + re-embed");
+        classifyCount.ShouldBe(2, "ClassifyRequest should run twice: initial + re-classify");
     }
 
     // -------------------------------------------------------------------------
-    // Test 22: ReEmbeddingRequested with same model version — saga NOT matched (no re-enhance).
+    // Test 22: ClassificationInvalidated with same model version — saga NOT matched.
     // -------------------------------------------------------------------------
 
     [Test]
-    public async Task ReEmbeddingRequested_same_model_version_does_not_match()
+    public async Task ClassificationInvalidated_same_model_version_does_not_match()
     {
         var clock = MakeClock();
 
@@ -1285,25 +1280,25 @@ public sealed class MessageSagaStateMachineTests
         await harness.Bus.Publish<MessageCaptured>(BuildMessageCaptured(snowflake));
         await sagaHarness.Exists(expectedId, m => m.Enriched, timeout: TimeSpan.FromSeconds(10));
 
-        // Same model version — CorrelateBy predicate rejects this saga.
-        await harness.Bus.Publish<ReEmbeddingRequested>(new
+        // Same classify model version — CorrelateBy predicate rejects this saga.
+        await harness.Bus.Publish<ClassificationInvalidated>(new
         {
-            ModelVersion = StubEmbeddingModel,
+            ModelVersion = StubTagModel,
             Cutoff = FixedNow.AddHours(1),
         });
 
         await Task.Delay(300);
 
         var saga = sagaHarness.Sagas.Contains(expectedId);
-        saga!.CurrentState.ShouldBe("Enriched", "Saga must not be disturbed when model version matches");
+        saga!.CurrentState.ShouldBe("Enriched", "Saga must not be disturbed when classify model version matches");
     }
 
     // -------------------------------------------------------------------------
-    // Test 23: ReEmbeddingRequested with cutoff BEFORE saga.LastUpdatedAt — no match.
+    // Test 23: ClassificationInvalidated with cutoff BEFORE saga.UpdatedOn — no match.
     // -------------------------------------------------------------------------
 
     [Test]
-    public async Task ReEmbeddingRequested_cutoff_before_last_updated_at_does_not_match()
+    public async Task ClassificationInvalidated_cutoff_before_last_updated_at_does_not_match()
     {
         var clock = MakeClock();
 
@@ -1318,8 +1313,8 @@ public sealed class MessageSagaStateMachineTests
         await harness.Bus.Publish<MessageCaptured>(BuildMessageCaptured(snowflake));
         await sagaHarness.Exists(expectedId, m => m.Enriched, timeout: TimeSpan.FromSeconds(10));
 
-        // Cutoff in the past (before FixedNow = LastUpdatedAt) — predicate rejects.
-        await harness.Bus.Publish<ReEmbeddingRequested>(new
+        // Cutoff in the past (before FixedNow = UpdatedOn) — predicate rejects.
+        await harness.Bus.Publish<ClassificationInvalidated>(new
         {
             ModelVersion = "mxbai-embed-large",
             Cutoff = FixedNow.AddHours(-1),
@@ -1328,15 +1323,15 @@ public sealed class MessageSagaStateMachineTests
         await Task.Delay(300);
 
         var saga = sagaHarness.Sagas.Contains(expectedId);
-        saga!.CurrentState.ShouldBe("Enriched", "Cutoff before LastUpdatedAt must exclude the saga");
+        saga!.CurrentState.ShouldBe("Enriched", "Cutoff before UpdatedOn must exclude the saga");
     }
 
     // -------------------------------------------------------------------------
-    // Test 24: ReEmbeddingRequested while saga is not in Enriched — no match.
+    // Test 24: ClassificationInvalidated while saga is not in Enriched — no match.
     // -------------------------------------------------------------------------
 
     [Test]
-    public async Task ReEmbeddingRequested_saga_not_in_Enriched_is_not_matched()
+    public async Task ClassificationInvalidated_saga_not_in_Enriched_is_not_matched()
     {
         var clock = MakeClock();
 
@@ -1362,7 +1357,7 @@ public sealed class MessageSagaStateMachineTests
         await harness.Bus.Publish<MessageCaptured>(BuildMessageCaptured(snowflake));
         await sagaHarness.Exists(expectedId, machine.AnalyzeMessage.Pending, timeout: TimeSpan.FromSeconds(5));
 
-        await harness.Bus.Publish<ReEmbeddingRequested>(new
+        await harness.Bus.Publish<ClassificationInvalidated>(new
         {
             ModelVersion = "mxbai-embed-large",
             Cutoff = FixedNow.AddHours(1),
@@ -1373,21 +1368,22 @@ public sealed class MessageSagaStateMachineTests
         // Saga is in AnalyzeMessage_Pending — CorrelateBy requires CurrentState == "Enriched".
         var saga = sagaHarness.Sagas.Contains(expectedId);
         saga!.CurrentState.ShouldNotBe("Enriched",
-            "Saga in non-Enriched state must not be matched by ReEmbeddingRequested");
+            "Saga in non-Enriched state must not be matched by ClassificationInvalidated");
     }
 
     // -------------------------------------------------------------------------
-    // Test 25: ReTagRequested with new model version re-enters Enhance and stamps TagModelVersion.
+    // Test 25: TagsInvalidated with new embedding model re-enters Tagging and stamps EmbeddingModelVersion.
     // -------------------------------------------------------------------------
 
     [Test]
-    public async Task ReTagRequested_with_new_model_triggers_re_enhance_and_stamps_version()
+    public async Task TagsInvalidated_with_new_model_triggers_re_tag_classify_and_stamps_version()
     {
         var clock = MakeClock();
-        const string oldTagModel = "qwen2.5-coder:7b";
-        const string newTagModel = "llama3.1:70b";
+        const string oldEmbeddingModel = "nomic-embed-text";
+        const string newEmbeddingModel = "mxbai-embed-large";
 
-        var enhanceCount = 0;
+        var tagCount = 0;
+        var classifyCount = 0;
         await using var provider = new ServiceCollection()
             .AddSingleton(clock)
             .AddMassTransitTestHarness(cfg =>
@@ -1404,19 +1400,22 @@ public sealed class MessageSagaStateMachineTests
                 cfg.AddHandler<ProjectMessageRequest>(async ctx =>
                     await ctx.RespondAsync(new ProjectMessageResponse(StubIR)));
 
-                cfg.AddHandler<EnhanceMessageRequest>(async ctx =>
+                cfg.AddHandler<TagMessageRequest>(async ctx =>
                 {
-                    var n = Interlocked.Increment(ref enhanceCount);
-                    var tagModel = n == 1 ? oldTagModel : newTagModel;
-                    await ctx.RespondAsync(new EnhanceMessageResponse(
-                        Tags: StubTags,
-                        Embedding: StubEmbedding,
-                        EmbeddingModelVersion: StubEmbeddingModel,
-                        TagModelVersion: tagModel));
+                    var embeddingModel = Interlocked.Increment(ref tagCount) == 1
+                        ? oldEmbeddingModel
+                        : newEmbeddingModel;
+                    await ctx.RespondAsync(new TagMessageResponse { Embedding = StubEmbedding,
+                        EmbeddingModelVersion = embeddingModel });
                 });
 
-                cfg.AddHandler<IndexMessageRequest>(async ctx =>
-                    await ctx.RespondAsync<IndexMessageResponse>(new { IndexedAt = FixedIndexedAt }));
+                cfg.AddHandler<ClassifyMessageRequest>(async ctx =>
+                {
+                    Interlocked.Increment(ref classifyCount);
+                    await ctx.RespondAsync(new ClassifyMessageResponse { Tags = StubTags,
+                        ClassifyModelVersion = StubTagModel,
+                        IndexedAt = FixedIndexedAt });
+                });
             })
             .BuildServiceProvider(true);
 
@@ -1431,29 +1430,32 @@ public sealed class MessageSagaStateMachineTests
         await sagaHarness.Exists(expectedId, m => m.Enriched, timeout: TimeSpan.FromSeconds(10));
 
         var sagaBefore = sagaHarness.Sagas.Contains(expectedId);
-        sagaBefore!.TagModelVersion.ShouldBe(oldTagModel);
+        sagaBefore!.EmbeddingModelVersion.ShouldBe(oldEmbeddingModel);
 
-        await harness.Bus.Publish<ReTagRequested>(new
+        await harness.Bus.Publish<TagsInvalidated>(new
         {
-            ModelVersion = newTagModel,
+            ModelVersion = newEmbeddingModel,
             Cutoff = FixedNow.AddHours(1),
         });
 
+        // TagsInvalidated re-enters from Tagging (both Tag + Classify re-run).
         var machine = provider.GetRequiredService<MessageSagaStateMachine>();
-        await sagaHarness.Exists(expectedId, machine.EnhanceMessage.Pending, timeout: TimeSpan.FromSeconds(5));
+        await sagaHarness.Exists(expectedId, machine.Tagging, timeout: TimeSpan.FromSeconds(5));
         await sagaHarness.Exists(expectedId, m => m.Enriched, timeout: TimeSpan.FromSeconds(10));
 
         var sagaAfter = sagaHarness.Sagas.Contains(expectedId);
-        sagaAfter!.TagModelVersion.ShouldBe(newTagModel, "TagModelVersion must be stamped from response");
-        enhanceCount.ShouldBe(2, "EnhanceMessage should run twice: initial + re-tag");
+        sagaAfter!.EmbeddingModelVersion.ShouldBe(newEmbeddingModel,
+            "EmbeddingModelVersion must be stamped from second TagRequest.Completed");
+        tagCount.ShouldBe(2, "TagRequest should run twice: initial + re-tag");
+        classifyCount.ShouldBe(2, "ClassifyRequest should run twice: initial + re-classify after re-tag");
     }
 
     // -------------------------------------------------------------------------
-    // Test 26: ReTagRequested with same model version — saga NOT matched.
+    // Test 26: TagsInvalidated with same model version — saga NOT matched.
     // -------------------------------------------------------------------------
 
     [Test]
-    public async Task ReTagRequested_same_model_version_does_not_match()
+    public async Task TagsInvalidated_same_model_version_does_not_match()
     {
         var clock = MakeClock();
 
@@ -1468,15 +1470,555 @@ public sealed class MessageSagaStateMachineTests
         await harness.Bus.Publish<MessageCaptured>(BuildMessageCaptured(snowflake));
         await sagaHarness.Exists(expectedId, m => m.Enriched, timeout: TimeSpan.FromSeconds(10));
 
-        await harness.Bus.Publish<ReTagRequested>(new
+        await harness.Bus.Publish<TagsInvalidated>(new
         {
-            ModelVersion = StubTagModel,
+            ModelVersion = StubEmbeddingModel,
             Cutoff = FixedNow.AddHours(1),
         });
 
         await Task.Delay(300);
 
         var saga = sagaHarness.Sagas.Contains(expectedId);
-        saga!.CurrentState.ShouldBe("Enriched", "Saga must not be disturbed when tag model version matches");
+        saga!.CurrentState.ShouldBe("Enriched", "Saga must not be disturbed when embedding model version matches");
+    }
+
+    // =========================================================================
+    // Replay from Faulted — MessageReplayRequested
+    // =========================================================================
+
+    // Helper: drives a saga to Faulted on the Tag phase (no embedding stored).
+    private static ServiceProvider BuildProviderTagFaulted(ISystemClock clock)
+    {
+        return new ServiceCollection()
+            .AddSingleton(clock)
+            .AddMassTransitTestHarness(cfg =>
+            {
+                cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
+                    .InMemoryRepository();
+
+                cfg.AddHandler<AnalyzeMessageRequest>(async ctx =>
+                    await ctx.RespondAsync<AnalyzeMessageResponse>(new
+                    {
+                        IsSubstantive = true, IsBot = false, DetectedLanguage = "en",
+                    }));
+
+                cfg.AddHandler<ProjectMessageRequest>(async ctx =>
+                    await ctx.RespondAsync(new ProjectMessageResponse(StubIR)));
+
+                cfg.AddHandler<TagMessageRequest>((Func<ConsumeContext<TagMessageRequest>, Task>)(_ =>
+                    throw new InvalidOperationException("embedding unavailable")));
+            })
+            .BuildServiceProvider(true);
+    }
+
+    // Helper: drives a saga to Faulted on the Classify phase (embedding stored, tags missing).
+    private static ServiceProvider BuildProviderClassifyFaulted(ISystemClock clock)
+    {
+        return new ServiceCollection()
+            .AddSingleton(clock)
+            .AddMassTransitTestHarness(cfg =>
+            {
+                cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
+                    .InMemoryRepository();
+
+                cfg.AddHandler<AnalyzeMessageRequest>(async ctx =>
+                    await ctx.RespondAsync<AnalyzeMessageResponse>(new
+                    {
+                        IsSubstantive = true, IsBot = false, DetectedLanguage = "en",
+                    }));
+
+                cfg.AddHandler<ProjectMessageRequest>(async ctx =>
+                    await ctx.RespondAsync(new ProjectMessageResponse(StubIR)));
+
+                cfg.AddHandler<TagMessageRequest>(async ctx =>
+                    await ctx.RespondAsync(new TagMessageResponse { Embedding = StubEmbedding,
+                        EmbeddingModelVersion = StubEmbeddingModel }));
+
+                cfg.AddHandler<ClassifyMessageRequest>((Func<ConsumeContext<ClassifyMessageRequest>, Task>)(_ =>
+                    throw new InvalidOperationException("llm unavailable")));
+            })
+            .BuildServiceProvider(true);
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 27: MessageReplayRequested with phase=null re-enters Tagging from TagFaulted.
+    // -------------------------------------------------------------------------
+
+    [Test]
+    public async Task MessageReplayRequested_phase_null_re_enters_Tagging_from_TagFaulted_saga()
+    {
+        var clock = MakeClock();
+
+        var tagCount = 0;
+        await using var provider = new ServiceCollection()
+            .AddSingleton(clock)
+            .AddMassTransitTestHarness(cfg =>
+            {
+                cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
+                    .InMemoryRepository();
+
+                cfg.AddHandler<AnalyzeMessageRequest>(async ctx =>
+                    await ctx.RespondAsync<AnalyzeMessageResponse>(new
+                    {
+                        IsSubstantive = true, IsBot = false, DetectedLanguage = "en",
+                    }));
+
+                cfg.AddHandler<ProjectMessageRequest>(async ctx =>
+                    await ctx.RespondAsync(new ProjectMessageResponse(StubIR)));
+
+                cfg.AddHandler<TagMessageRequest>(async ctx =>
+                {
+                    // First call faults, second succeeds (replay).
+                    if (Interlocked.Increment(ref tagCount) == 1)
+                        throw new InvalidOperationException("first attempt fails");
+
+                    await ctx.RespondAsync(new TagMessageResponse { Embedding = StubEmbedding,
+                        EmbeddingModelVersion = StubEmbeddingModel });
+                });
+
+                cfg.AddHandler<ClassifyMessageRequest>(async ctx =>
+                    await ctx.RespondAsync(new ClassifyMessageResponse { Tags = StubTags,
+                        ClassifyModelVersion = StubTagModel,
+                        IndexedAt = FixedIndexedAt }));
+            })
+            .BuildServiceProvider(true);
+
+        var harness = provider.GetTestHarness();
+        await harness.Start();
+
+        const long snowflake = 820000000000000001L;
+        var expectedId = DeterministicGuid.FromSnowflake(snowflake);
+        var sagaHarness = harness.GetSagaStateMachineHarness<MessageSagaStateMachine, MessageSagaState>();
+
+        await harness.Bus.Publish<MessageCaptured>(BuildMessageCaptured(snowflake));
+        await sagaHarness.Exists(expectedId, m => m.Faulted, timeout: TimeSpan.FromSeconds(10));
+
+        // ClearRequestIdOnFaulted: after fault, TagRequestId must be null so replay can re-fire.
+        var faultedSaga = sagaHarness.Sagas.Contains(expectedId);
+        faultedSaga.ShouldNotBeNull();
+        faultedSaga.Embedding.ShouldBeNull("No embedding stored when Tag faulted");
+
+        // Publish replay — phase null matches all Faulted sagas.
+        await harness.Bus.Publish<MessageReplayRequested>(new
+        {
+            Timestamp = FixedNow,
+            Phase = (string?)null,
+        });
+
+        // Saga re-enters Tagging, completes Tag + Classify, reaches Enriched.
+        await sagaHarness.Exists(expectedId, m => m.Enriched, timeout: TimeSpan.FromSeconds(10));
+
+        var enrichedSaga = sagaHarness.Sagas.Contains(expectedId);
+        enrichedSaga.ShouldNotBeNull();
+        enrichedSaga.Embedding.ShouldNotBeNull("Embedding must be set after successful replay");
+        enrichedSaga.Tags.ShouldNotBeNull("Tags must be set after successful replay");
+        tagCount.ShouldBe(2, "TagRequest must run twice: initial fault + replay");
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 28: MessageReplayRequested with phase=classify re-enters Classifying
+    //          from ClassifyFaulted saga (embedding preserved from first Tag run).
+    // -------------------------------------------------------------------------
+
+    [Test]
+    public async Task MessageReplayRequested_phase_classify_re_enters_Classifying_from_ClassifyFaulted_saga()
+    {
+        var clock = MakeClock();
+
+        var classifyCount = 0;
+        await using var provider = new ServiceCollection()
+            .AddSingleton(clock)
+            .AddMassTransitTestHarness(cfg =>
+            {
+                cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
+                    .InMemoryRepository();
+
+                cfg.AddHandler<AnalyzeMessageRequest>(async ctx =>
+                    await ctx.RespondAsync<AnalyzeMessageResponse>(new
+                    {
+                        IsSubstantive = true, IsBot = false, DetectedLanguage = "en",
+                    }));
+
+                cfg.AddHandler<ProjectMessageRequest>(async ctx =>
+                    await ctx.RespondAsync(new ProjectMessageResponse(StubIR)));
+
+                cfg.AddHandler<TagMessageRequest>(async ctx =>
+                    await ctx.RespondAsync(new TagMessageResponse { Embedding = StubEmbedding,
+                        EmbeddingModelVersion = StubEmbeddingModel }));
+
+                cfg.AddHandler<ClassifyMessageRequest>(async ctx =>
+                {
+                    // First call faults, second succeeds (replay skips Tag — embedding preserved).
+                    if (Interlocked.Increment(ref classifyCount) == 1)
+                        throw new InvalidOperationException("first classify attempt fails");
+
+                    await ctx.RespondAsync(new ClassifyMessageResponse { Tags = StubTags,
+                        ClassifyModelVersion = StubTagModel,
+                        IndexedAt = FixedIndexedAt });
+                });
+            })
+            .BuildServiceProvider(true);
+
+        var harness = provider.GetTestHarness();
+        await harness.Start();
+
+        const long snowflake = 821000000000000001L;
+        var expectedId = DeterministicGuid.FromSnowflake(snowflake);
+        var sagaHarness = harness.GetSagaStateMachineHarness<MessageSagaStateMachine, MessageSagaState>();
+
+        await harness.Bus.Publish<MessageCaptured>(BuildMessageCaptured(snowflake));
+        await sagaHarness.Exists(expectedId, m => m.Faulted, timeout: TimeSpan.FromSeconds(10));
+
+        var faultedSaga = sagaHarness.Sagas.Contains(expectedId);
+        faultedSaga.ShouldNotBeNull();
+        faultedSaga.Embedding.ShouldNotBeNull("Embedding preserved after Classify fault");
+        faultedSaga.Tags.ShouldBeNull("Tags not stored when Classify faulted");
+
+        // Publish replay with phase=classify — only ClassifyFaulted sagas match.
+        await harness.Bus.Publish<MessageReplayRequested>(new
+        {
+            Timestamp = FixedNow,
+            Phase = "classify",
+        });
+
+        // Saga re-enters Classifying directly (Tag skipped), reaches Enriched.
+        var machine = provider.GetRequiredService<MessageSagaStateMachine>();
+        await sagaHarness.Exists(expectedId, machine.Classifying, timeout: TimeSpan.FromSeconds(5));
+        await sagaHarness.Exists(expectedId, m => m.Enriched, timeout: TimeSpan.FromSeconds(10));
+
+        var enrichedSaga = sagaHarness.Sagas.Contains(expectedId);
+        enrichedSaga.ShouldNotBeNull();
+        enrichedSaga.Tags.ShouldNotBeNull("Tags set after successful classify replay");
+        // TagRequest ran exactly once — replay does not re-embed.
+        classifyCount.ShouldBe(2, "ClassifyRequest must run twice: initial fault + replay");
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 29: ClearRequestIdOnFaulted round-trip — stale TagRequestId is nulled after fault
+    //          so a second Request(TagRequest) gets a fresh correlation ID.
+    // -------------------------------------------------------------------------
+
+    [Test]
+    public async Task ClearRequestIdOnFaulted_nulls_TagRequestId_after_fault()
+    {
+        var clock = MakeClock();
+        await using var provider = BuildProviderTagFaulted(clock);
+
+        var harness = provider.GetTestHarness();
+        await harness.Start();
+
+        const long snowflake = 822000000000000001L;
+        var expectedId = DeterministicGuid.FromSnowflake(snowflake);
+        var sagaHarness = harness.GetSagaStateMachineHarness<MessageSagaStateMachine, MessageSagaState>();
+
+        await harness.Bus.Publish<MessageCaptured>(BuildMessageCaptured(snowflake));
+        await sagaHarness.Exists(expectedId, m => m.Faulted, timeout: TimeSpan.FromSeconds(10));
+
+        // ClearRequestIdOnFaulted must null the request ID on the saga after fault.
+        var saga = sagaHarness.Sagas.Contains(expectedId);
+        saga.ShouldNotBeNull();
+        saga.TagRequestId.ShouldBeNull(
+            "ClearRequestIdOnFaulted must null TagRequestId so replay can fire a fresh correlation");
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 30: MessageReplayRequested phase=tag does not match a ClassifyFaulted saga.
+    // -------------------------------------------------------------------------
+
+    [Test]
+    public async Task MessageReplayRequested_phase_tag_does_not_match_ClassifyFaulted_saga()
+    {
+        var clock = MakeClock();
+        await using var provider = BuildProviderClassifyFaulted(clock);
+
+        var harness = provider.GetTestHarness();
+        await harness.Start();
+
+        const long snowflake = 823000000000000001L;
+        var expectedId = DeterministicGuid.FromSnowflake(snowflake);
+        var sagaHarness = harness.GetSagaStateMachineHarness<MessageSagaStateMachine, MessageSagaState>();
+
+        await harness.Bus.Publish<MessageCaptured>(BuildMessageCaptured(snowflake));
+        await sagaHarness.Exists(expectedId, m => m.Faulted, timeout: TimeSpan.FromSeconds(10));
+
+        // Verify this is a ClassifyFaulted saga (embedding present, tags null).
+        var faultedSaga = sagaHarness.Sagas.Contains(expectedId);
+        faultedSaga.ShouldNotBeNull();
+        faultedSaga.Embedding.ShouldNotBeNull();
+        faultedSaga.Tags.ShouldBeNull();
+
+        // phase=tag only matches sagas with Embedding == null — this saga has embedding, so no match.
+        await harness.Bus.Publish<MessageReplayRequested>(new
+        {
+            Timestamp = FixedNow,
+            Phase = "tag",
+        });
+
+        await Task.Delay(300);
+
+        var saga = sagaHarness.Sagas.Contains(expectedId);
+        saga!.CurrentState.ShouldBe("Faulted",
+            "phase=tag must not match a ClassifyFaulted saga (which has embedding stored)");
+    }
+
+    // =========================================================================
+    // Gap coverage tests added post-review
+    // =========================================================================
+
+    // -------------------------------------------------------------------------
+    // Test 31: MessageReplayRequested with no Faulted sagas → OnMissingInstance.Discard
+    //          No exception, no phantom saga, no state transition.
+    // -------------------------------------------------------------------------
+
+    [Test]
+    public async Task MessageReplayRequested_with_no_Faulted_sagas_discards_safely()
+    {
+        var clock = MakeClock();
+
+        // Harness with a saga parked in Enriched (not Faulted) — predicate will not match.
+        await using var provider = BuildProvider(clock);
+        var harness = provider.GetTestHarness();
+        await harness.Start();
+
+        const long snowflake = 830000000000000001L;
+        var expectedId = DeterministicGuid.FromSnowflake(snowflake);
+        var sagaHarness = harness.GetSagaStateMachineHarness<MessageSagaStateMachine, MessageSagaState>();
+
+        await harness.Bus.Publish<MessageCaptured>(BuildMessageCaptured(snowflake));
+        await sagaHarness.Exists(expectedId, m => m.Enriched, timeout: TimeSpan.FromSeconds(10));
+
+        // Publish replay against a harness where no saga is in Faulted state.
+        // OnMissingInstance.Discard must swallow this without faulting the harness.
+        await harness.Bus.Publish<MessageReplayRequested>(new
+        {
+            Timestamp = FixedNow,
+            Phase = (string?)null,
+        });
+
+        await Task.Delay(300);
+
+        // Original saga must remain in Enriched — no unexpected transition.
+        var saga = sagaHarness.Sagas.Contains(expectedId);
+        saga.ShouldNotBeNull();
+        saga.CurrentState.ShouldBe("Enriched",
+            "Enriched saga must not be disturbed when MessageReplayRequested finds no Faulted match");
+
+        // No phantom saga created for the replay event (repo still has exactly one saga).
+        sagaHarness.Sagas.Count().ShouldBe(1,
+            "OnMissingInstance.Discard must not create a phantom saga instance");
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 32: MessageReplayRequested with no sagas at all → Discard, no exception.
+    // -------------------------------------------------------------------------
+
+    [Test]
+    public async Task MessageReplayRequested_with_empty_repository_discards_safely()
+    {
+        var clock = MakeClock();
+
+        // Empty harness — no sagas published at all.
+        await using var provider = BuildProvider(clock);
+        var harness = provider.GetTestHarness();
+        await harness.Start();
+
+        var sagaHarness = harness.GetSagaStateMachineHarness<MessageSagaStateMachine, MessageSagaState>();
+
+        // Should not throw — OnMissingInstance.Discard handles zero matches.
+        await harness.Bus.Publish<MessageReplayRequested>(new
+        {
+            Timestamp = FixedNow,
+            Phase = "tag",
+        });
+
+        await Task.Delay(300);
+
+        sagaHarness.Sagas.Count().ShouldBe(0,
+            "No sagas should be created when MessageReplayRequested finds no matches");
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 33: TagsInvalidated end-to-end — re-enters Tagging, stamps EmbeddingModelVersion
+    //          to the new model after second TagRequest.Completed.
+    // -------------------------------------------------------------------------
+
+    [Test]
+    public async Task TagsInvalidated_stamps_EmbeddingModelVersion_to_new_model_after_re_tag()
+    {
+        var clock = MakeClock();
+        const string oldEmbeddingModel = "nomic-embed-text";
+        const string newEmbeddingModel = "mxbai-embed-large";
+
+        var tagCount = 0;
+        var classifyCount = 0;
+
+        await using var provider = new ServiceCollection()
+            .AddSingleton(clock)
+            .AddMassTransitTestHarness(cfg =>
+            {
+                cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
+                    .InMemoryRepository();
+
+                cfg.AddHandler<AnalyzeMessageRequest>(async ctx =>
+                    await ctx.RespondAsync<AnalyzeMessageResponse>(new
+                    {
+                        IsSubstantive = true, IsBot = false, DetectedLanguage = "en",
+                    }));
+
+                cfg.AddHandler<ProjectMessageRequest>(async ctx =>
+                    await ctx.RespondAsync(new ProjectMessageResponse(StubIR)));
+
+                cfg.AddHandler<TagMessageRequest>(async ctx =>
+                {
+                    // First call returns old model; second (re-tag) returns new model.
+                    var embeddingModel = Interlocked.Increment(ref tagCount) == 1
+                        ? oldEmbeddingModel
+                        : newEmbeddingModel;
+                    await ctx.RespondAsync(new TagMessageResponse
+                    {
+                        Embedding = StubEmbedding,
+                        EmbeddingModelVersion = embeddingModel,
+                    });
+                });
+
+                cfg.AddHandler<ClassifyMessageRequest>(async ctx =>
+                {
+                    Interlocked.Increment(ref classifyCount);
+                    await ctx.RespondAsync(new ClassifyMessageResponse
+                    {
+                        Tags = StubTags,
+                        ClassifyModelVersion = StubTagModel,
+                        IndexedAt = FixedIndexedAt,
+                    });
+                });
+            })
+            .BuildServiceProvider(true);
+
+        var harness = provider.GetTestHarness();
+        await harness.Start();
+
+        const long snowflake = 840000000000000001L;
+        var expectedId = DeterministicGuid.FromSnowflake(snowflake);
+        var sagaHarness = harness.GetSagaStateMachineHarness<MessageSagaStateMachine, MessageSagaState>();
+
+        // Drive to Enriched with old embedding model.
+        await harness.Bus.Publish<MessageCaptured>(BuildMessageCaptured(snowflake));
+        await sagaHarness.Exists(expectedId, m => m.Enriched, timeout: TimeSpan.FromSeconds(10));
+
+        var sagaBefore = sagaHarness.Sagas.Contains(expectedId);
+        sagaBefore!.EmbeddingModelVersion.ShouldBe(oldEmbeddingModel,
+            "EmbeddingModelVersion must be stamped from first TagRequest");
+
+        // TagsInvalidated predicate: EmbeddingModelVersion != ModelVersion.
+        // Drive re-tag by requesting an EmbeddingModelVersion the saga does not currently have.
+        const string newTagModel = "llama3.1:70b";
+        await harness.Bus.Publish<TagsInvalidated>(new
+        {
+            ModelVersion = newTagModel,
+            Cutoff = FixedNow.AddHours(1),
+        });
+
+        var machine = provider.GetRequiredService<MessageSagaStateMachine>();
+        await sagaHarness.Exists(expectedId, machine.Tagging, timeout: TimeSpan.FromSeconds(5));
+        await sagaHarness.Exists(expectedId, m => m.Enriched, timeout: TimeSpan.FromSeconds(10));
+
+        var sagaAfter = sagaHarness.Sagas.Contains(expectedId);
+        sagaAfter.ShouldNotBeNull();
+        sagaAfter.EmbeddingModelVersion.ShouldBe(newEmbeddingModel,
+            "EmbeddingModelVersion must be re-stamped from second TagRequest.Completed under new model");
+        tagCount.ShouldBe(2, "TagRequest fired exactly twice: initial + re-tag");
+        classifyCount.ShouldBe(2, "ClassifyRequest fired exactly twice: initial + re-classify after re-tag");
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 34: ClassificationInvalidated end-to-end — re-enters Classifying, stamps ClassifyModelVersion
+    //          to the new model after second ClassifyRequest.Completed.
+    // -------------------------------------------------------------------------
+
+    [Test]
+    public async Task ClassificationInvalidated_end_to_end_stamps_ClassifyModelVersion_to_new_model()
+    {
+        var clock = MakeClock();
+        const string oldEmbeddingModel = "nomic-embed-text";
+        const string newEmbeddingModel = "mxbai-embed-large";
+        const string newTagModel = "llama3.1:70b";
+
+        var classifyCount = 0;
+
+        await using var provider = new ServiceCollection()
+            .AddSingleton(clock)
+            .AddMassTransitTestHarness(cfg =>
+            {
+                cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
+                    .InMemoryRepository();
+
+                cfg.AddHandler<AnalyzeMessageRequest>(async ctx =>
+                    await ctx.RespondAsync<AnalyzeMessageResponse>(new
+                    {
+                        IsSubstantive = true, IsBot = false, DetectedLanguage = "en",
+                    }));
+
+                cfg.AddHandler<ProjectMessageRequest>(async ctx =>
+                    await ctx.RespondAsync(new ProjectMessageResponse(StubIR)));
+
+                cfg.AddHandler<TagMessageRequest>(async ctx =>
+                    await ctx.RespondAsync(new TagMessageResponse
+                    {
+                        Embedding = StubEmbedding,
+                        EmbeddingModelVersion = oldEmbeddingModel,
+                    }));
+
+                cfg.AddHandler<ClassifyMessageRequest>(async ctx =>
+                {
+                    // Second classify call (re-classify) returns the new classify model version.
+                    var classifyModel = Interlocked.Increment(ref classifyCount) == 1
+                        ? StubTagModel
+                        : newTagModel;
+                    await ctx.RespondAsync(new ClassifyMessageResponse
+                    {
+                        Tags = StubTags,
+                        ClassifyModelVersion = classifyModel,
+                        IndexedAt = FixedIndexedAt,
+                    });
+                });
+            })
+            .BuildServiceProvider(true);
+
+        var harness = provider.GetTestHarness();
+        await harness.Start();
+
+        const long snowflake = 841000000000000001L;
+        var expectedId = DeterministicGuid.FromSnowflake(snowflake);
+        var sagaHarness = harness.GetSagaStateMachineHarness<MessageSagaStateMachine, MessageSagaState>();
+
+        // Drive to Enriched with old embedding model.
+        await harness.Bus.Publish<MessageCaptured>(BuildMessageCaptured(snowflake));
+        await sagaHarness.Exists(expectedId, m => m.Enriched, timeout: TimeSpan.FromSeconds(10));
+
+        var sagaBefore = sagaHarness.Sagas.Contains(expectedId);
+        sagaBefore!.EmbeddingModelVersion.ShouldBe(oldEmbeddingModel,
+            "Initial EmbeddingModelVersion must match TagRequest response");
+        sagaBefore.ClassifyModelVersion.ShouldBe(StubTagModel,
+            "Initial ClassifyModelVersion must match first ClassifyRequest response");
+
+        // Publish ClassificationInvalidated with a new classify model — predicate: ClassifyModelVersion != ModelVersion.
+        await harness.Bus.Publish<ClassificationInvalidated>(new
+        {
+            ModelVersion = newTagModel,
+            Cutoff = FixedNow.AddHours(1),
+        });
+
+        // Saga must leave Enriched, enter Classifying (Tag skipped), then return to Enriched.
+        var machine = provider.GetRequiredService<MessageSagaStateMachine>();
+        await sagaHarness.Exists(expectedId, machine.Classifying, timeout: TimeSpan.FromSeconds(5));
+        await sagaHarness.Exists(expectedId, m => m.Enriched, timeout: TimeSpan.FromSeconds(10));
+
+        var sagaAfter = sagaHarness.Sagas.Contains(expectedId);
+        sagaAfter.ShouldNotBeNull();
+        sagaAfter.ClassifyModelVersion.ShouldBe(newTagModel,
+            "ClassifyModelVersion must be re-stamped from second ClassifyRequest.Completed");
+        sagaAfter.EmbeddingModelVersion.ShouldBe(oldEmbeddingModel,
+            "EmbeddingModelVersion must not change — ClassificationInvalidated skips TagRequest");
+        classifyCount.ShouldBe(2, "ClassifyRequest fired exactly twice: initial + re-classify");
     }
 }

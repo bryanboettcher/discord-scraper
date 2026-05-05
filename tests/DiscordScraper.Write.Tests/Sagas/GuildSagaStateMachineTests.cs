@@ -28,11 +28,11 @@ public class GuildSagaStateMachineTests
     }
 
     // -------------------------------------------------------------------------
-    // Test 1: GuildSyncRequested creates saga in Syncing state
+    // Test 1: GuildSyncDue creates saga in Syncing state
     // -------------------------------------------------------------------------
 
     [Test]
-    public async Task GuildSyncRequested_creates_saga_in_Syncing_state()
+    public async Task GuildSyncDue_creates_saga_in_Syncing_state()
     {
         var clock = MakeClock();
         await using var provider = new ServiceCollection()
@@ -50,11 +50,11 @@ public class GuildSagaStateMachineTests
         const long guildId = 123456789012345678L;
         var expectedCorrelationId = DeterministicGuid.FromSnowflake(guildId);
 
-        await harness.Bus.Publish<GuildSyncRequested>(new
+        await harness.Bus.Publish<GuildSyncDue>(new
         {
             GuildId = guildId,
             CurrentState = "Initial",
-            LastUpdatedAt = FixedNow,
+            UpdatedOn = FixedNow,
         });
 
         var sagaHarness = harness.GetSagaStateMachineHarness<GuildSagaStateMachine, GuildSagaState>();
@@ -66,7 +66,7 @@ public class GuildSagaStateMachineTests
         saga.ShouldNotBeNull();
         saga.GuildId.ShouldBe(guildId);
         saga.CorrelationId.ShouldBe(expectedCorrelationId);
-        saga.LastUpdatedAt.ShouldBe(FixedNow);
+        saga.UpdatedOn.ShouldBe(FixedNow);
     }
 
     // -------------------------------------------------------------------------
@@ -93,11 +93,11 @@ public class GuildSagaStateMachineTests
         var expectedCorrelationId = DeterministicGuid.FromSnowflake(guildId);
 
         // Drive into Syncing first.
-        await harness.Bus.Publish<GuildSyncRequested>(new
+        await harness.Bus.Publish<GuildSyncDue>(new
         {
             GuildId = guildId,
             CurrentState = "Initial",
-            LastUpdatedAt = FixedNow,
+            UpdatedOn = FixedNow,
         });
 
         var sagaHarness = harness.GetSagaStateMachineHarness<GuildSagaStateMachine, GuildSagaState>();
@@ -108,8 +108,9 @@ public class GuildSagaStateMachineTests
         {
             GuildId = guildId,
             Name = "My Test Guild",
+            IsPresent = true,
             CurrentState = "Synced",
-            LastUpdatedAt = FixedNow,
+            UpdatedOn = FixedNow,
         });
 
         var sagaId = await sagaHarness.Exists(expectedCorrelationId, m => m.Synced);
@@ -119,15 +120,15 @@ public class GuildSagaStateMachineTests
         saga.ShouldNotBeNull();
         saga.Name.ShouldBe("My Test Guild");
         saga.LastSyncedAt.ShouldBe(FixedNow);
-        saga.LastUpdatedAt.ShouldBe(FixedNow);
+        saga.UpdatedOn.ShouldBe(FixedNow);
     }
 
     // -------------------------------------------------------------------------
-    // Test 3: Re-publishing GuildSyncRequested while Synced re-enters Syncing
+    // Test 3: Re-publishing GuildSyncDue while Synced re-enters Syncing
     // -------------------------------------------------------------------------
 
     [Test]
-    public async Task GuildSyncRequested_while_Synced_re_enters_Syncing()
+    public async Task GuildSyncDue_while_Synced_re_enters_Syncing()
     {
         var clock = MakeClock();
         await using var provider = new ServiceCollection()
@@ -147,11 +148,11 @@ public class GuildSagaStateMachineTests
         var sagaHarness = harness.GetSagaStateMachineHarness<GuildSagaStateMachine, GuildSagaState>();
 
         // First cycle: Initial → Syncing → Synced.
-        await harness.Bus.Publish<GuildSyncRequested>(new
+        await harness.Bus.Publish<GuildSyncDue>(new
         {
             GuildId = guildId,
             CurrentState = "Initial",
-            LastUpdatedAt = FixedNow,
+            UpdatedOn = FixedNow,
         });
         await sagaHarness.Exists(expectedCorrelationId, m => m.Syncing);
 
@@ -159,21 +160,22 @@ public class GuildSagaStateMachineTests
         {
             GuildId = guildId,
             Name = "Guild v1",
+            IsPresent = true,
             CurrentState = "Synced",
-            LastUpdatedAt = FixedNow,
+            UpdatedOn = FixedNow,
         });
         await sagaHarness.Exists(expectedCorrelationId, m => m.Synced);
 
         // Second cycle: scheduler fires again while Synced → must re-enter Syncing.
-        await harness.Bus.Publish<GuildSyncRequested>(new
+        await harness.Bus.Publish<GuildSyncDue>(new
         {
             GuildId = guildId,
             CurrentState = "Synced",
-            LastUpdatedAt = FixedNow,
+            UpdatedOn = FixedNow,
         });
 
         var sagaId = await sagaHarness.Exists(expectedCorrelationId, m => m.Syncing);
-        sagaId.ShouldNotBeNull("Saga did not re-enter Syncing after second GuildSyncRequested");
+        sagaId.ShouldNotBeNull("Saga did not re-enter Syncing after second GuildSyncDue");
     }
 
     // -------------------------------------------------------------------------
@@ -200,9 +202,9 @@ public class GuildSagaStateMachineTests
         var expectedCorrelationId = DeterministicGuid.FromSnowflake(guildId);
         var sagaHarness = harness.GetSagaStateMachineHarness<GuildSagaStateMachine, GuildSagaState>();
 
-        await harness.Bus.Publish<GuildSyncRequested>(new
+        await harness.Bus.Publish<GuildSyncDue>(new
         {
-            GuildId = guildId, CurrentState = "Initial", LastUpdatedAt = FixedNow,
+            GuildId = guildId, CurrentState = "Initial", UpdatedOn = FixedNow,
         });
         await sagaHarness.Exists(expectedCorrelationId, m => m.Syncing);
 
@@ -215,8 +217,9 @@ public class GuildSagaStateMachineTests
                 new(1001L, "Admin"),
                 new(1002L, "Member"),
             },
+            IsPresent = true,
             CurrentState = "Synced",
-            LastUpdatedAt = FixedNow,
+            UpdatedOn = FixedNow,
         });
 
         await sagaHarness.Exists(expectedCorrelationId, m => m.Synced);
@@ -253,9 +256,9 @@ public class GuildSagaStateMachineTests
         var sagaHarness = harness.GetSagaStateMachineHarness<GuildSagaStateMachine, GuildSagaState>();
 
         // First sync cycle — initial roles.
-        await harness.Bus.Publish<GuildSyncRequested>(new
+        await harness.Bus.Publish<GuildSyncDue>(new
         {
-            GuildId = guildId, CurrentState = "Initial", LastUpdatedAt = FixedNow,
+            GuildId = guildId, CurrentState = "Initial", UpdatedOn = FixedNow,
         });
         await sagaHarness.Exists(expectedCorrelationId, m => m.Syncing);
 
@@ -264,15 +267,16 @@ public class GuildSagaStateMachineTests
             GuildId = guildId,
             Name = "My Guild",
             Roles = new List<GuildRole> { new(100L, "OldRole") },
+            IsPresent = true,
             CurrentState = "Synced",
-            LastUpdatedAt = FixedNow,
+            UpdatedOn = FixedNow,
         });
         await sagaHarness.Exists(expectedCorrelationId, m => m.Synced);
 
         // Second sync cycle — Discord returns a different authoritative set.
-        await harness.Bus.Publish<GuildSyncRequested>(new
+        await harness.Bus.Publish<GuildSyncDue>(new
         {
-            GuildId = guildId, CurrentState = "Synced", LastUpdatedAt = FixedNow,
+            GuildId = guildId, CurrentState = "Synced", UpdatedOn = FixedNow,
         });
         await sagaHarness.Exists(expectedCorrelationId, m => m.Syncing);
 
@@ -281,8 +285,9 @@ public class GuildSagaStateMachineTests
             GuildId = guildId,
             Name = "My Guild",
             Roles = new List<GuildRole> { new(200L, "NewRole"), new(201L, "AnotherRole") },
+            IsPresent = true,
             CurrentState = "Synced",
-            LastUpdatedAt = FixedNow,
+            UpdatedOn = FixedNow,
         });
         await sagaHarness.Exists(expectedCorrelationId, m => m.Synced);
 
@@ -295,7 +300,7 @@ public class GuildSagaStateMachineTests
     }
 
     // -------------------------------------------------------------------------
-    // Test 6 (original 4): GuildSyncConsumer publishes ChannelSyncRequested + GuildChanged
+    // Test 6 (original 4): GuildSyncConsumer publishes ChannelSyncDue + GuildChanged
     // -------------------------------------------------------------------------
 
     [Test]
@@ -340,21 +345,21 @@ public class GuildSagaStateMachineTests
         var harness = provider.GetTestHarness();
         await harness.Start();
 
-        await harness.Bus.Publish<GuildSyncRequested>(new
+        await harness.Bus.Publish<GuildSyncDue>(new
         {
             GuildId = 42L,
             CurrentState = "Initial",
-            LastUpdatedAt = DateTimeOffset.UtcNow,
+            UpdatedOn = DateTimeOffset.UtcNow,
         });
 
         // 3 text-like channels (1,2,4) + 1 GuildChanged = 4 publishes.
-        (await harness.Published.Any<ChannelSyncRequested>()).ShouldBeTrue("No ChannelSyncRequested published");
+        (await harness.Published.Any<ChannelSyncDue>()).ShouldBeTrue("No ChannelSyncDue published");
         (await harness.Published.Any<GuildChanged>()).ShouldBeTrue("No GuildChanged published");
 
         var channelEvents = harness.Published
-            .Select<ChannelSyncRequested>()
+            .Select<ChannelSyncDue>()
             .ToList();
-        channelEvents.Count.ShouldBe(3, "Expected exactly 3 text-like ChannelSyncRequested (voice excluded)");
+        channelEvents.Count.ShouldBe(3, "Expected exactly 3 text-like ChannelSyncDue (voice excluded)");
 
         var publishedChannelIds = channelEvents
             .Select(e => e.Context.Message.ChannelId)
@@ -395,16 +400,16 @@ public class GuildSagaStateMachineTests
         var correlationId = DeterministicGuid.FromSnowflake(guildId);
         var sagaHarness = harness.GetSagaStateMachineHarness<GuildSagaStateMachine, GuildSagaState>();
 
-        // Bootstrap: SyncRequested → Syncing, then GuildChanged → Synced.
-        await harness.Bus.Publish<GuildSyncRequested>(new
+        // Bootstrap: SyncDue → Syncing, then GuildChanged → Synced.
+        await harness.Bus.Publish<GuildSyncDue>(new
         {
-            GuildId = guildId, CurrentState = "Initial", LastUpdatedAt = FixedNow,
+            GuildId = guildId, CurrentState = "Initial", UpdatedOn = FixedNow,
         });
         await sagaHarness.Exists(correlationId, m => m.Syncing);
 
         await harness.Bus.Publish<GuildChanged>(new
         {
-            GuildId = guildId, Name = "Heartbeat Guild", CurrentState = "Synced", LastUpdatedAt = FixedNow,
+            GuildId = guildId, Name = "Heartbeat Guild", IsPresent = true, CurrentState = "Synced", UpdatedOn = FixedNow,
         });
         await sagaHarness.Exists(correlationId, m => m.Synced);
 
@@ -441,15 +446,15 @@ public class GuildSagaStateMachineTests
         var sagaHarness = harness.GetSagaStateMachineHarness<GuildSagaStateMachine, GuildSagaState>();
 
         // Bootstrap into Synced — LastSyncedAt will be FixedNow.
-        await harness.Bus.Publish<GuildSyncRequested>(new
+        await harness.Bus.Publish<GuildSyncDue>(new
         {
-            GuildId = guildId, CurrentState = "Initial", LastUpdatedAt = FixedNow,
+            GuildId = guildId, CurrentState = "Initial", UpdatedOn = FixedNow,
         });
         await sagaHarness.Exists(correlationId, m => m.Syncing);
 
         await harness.Bus.Publish<GuildChanged>(new
         {
-            GuildId = guildId, Name = "Fresh Guild", CurrentState = "Synced", LastUpdatedAt = FixedNow,
+            GuildId = guildId, Name = "Fresh Guild", IsPresent = true, CurrentState = "Synced", UpdatedOn = FixedNow,
         });
         await sagaHarness.Exists(correlationId, m => m.Synced);
 
@@ -490,9 +495,9 @@ public class GuildSagaStateMachineTests
         var sagaHarness = harness.GetSagaStateMachineHarness<GuildSagaStateMachine, GuildSagaState>();
 
         // Bootstrap into Syncing — don't publish GuildChanged so it stays Syncing.
-        await harness.Bus.Publish<GuildSyncRequested>(new
+        await harness.Bus.Publish<GuildSyncDue>(new
         {
-            GuildId = guildId, CurrentState = "Initial", LastUpdatedAt = FixedNow,
+            GuildId = guildId, CurrentState = "Initial", UpdatedOn = FixedNow,
         });
         await sagaHarness.Exists(correlationId, m => m.Syncing);
 
@@ -533,15 +538,15 @@ public class GuildSagaStateMachineTests
         var sagaHarness = harness.GetSagaStateMachineHarness<GuildSagaStateMachine, GuildSagaState>();
 
         // Bootstrap into Synced.
-        await harness.Bus.Publish<GuildSyncRequested>(new
+        await harness.Bus.Publish<GuildSyncDue>(new
         {
-            GuildId = guildId, CurrentState = "Initial", LastUpdatedAt = FixedNow,
+            GuildId = guildId, CurrentState = "Initial", UpdatedOn = FixedNow,
         });
         await sagaHarness.Exists(correlationId, m => m.Syncing);
 
         await harness.Bus.Publish<GuildChanged>(new
         {
-            GuildId = guildId, Name = "Absent Guild", CurrentState = "Synced", LastUpdatedAt = FixedNow,
+            GuildId = guildId, Name = "Absent Guild", IsPresent = true, CurrentState = "Synced", UpdatedOn = FixedNow,
         });
         await sagaHarness.Exists(correlationId, m => m.Synced);
 
@@ -565,6 +570,55 @@ public class GuildSagaStateMachineTests
         saga.CurrentState.ShouldBe("Synced", "Saga with IsPresent=false must not be picked up by heartbeat");
     }
 
+    // -------------------------------------------------------------------------
+    // GuildChanged(IsPresent=false) while Syncing → saga.IsPresent=false, transitions Synced
+    // -------------------------------------------------------------------------
+
+    [Test]
+    public async Task GuildChanged_IsPresentFalse_WhileSyncing_SetsSagaIsPresentFalse()
+    {
+        var clock = MakeClock();
+        await using var provider = new ServiceCollection()
+            .AddSingleton(clock)
+            .AddMassTransitTestHarness(cfg =>
+            {
+                cfg.AddSagaStateMachine<GuildSagaStateMachine, GuildSagaState>()
+                    .InMemoryRepository();
+            })
+            .BuildServiceProvider(true);
+
+        var harness = provider.GetTestHarness();
+        await harness.Start();
+
+        const long guildId = 600000000000000001L;
+        var correlationId = DeterministicGuid.FromSnowflake(guildId);
+        var sagaHarness = harness.GetSagaStateMachineHarness<GuildSagaStateMachine, GuildSagaState>();
+
+        await harness.Bus.Publish<GuildSyncDue>(new
+        {
+            GuildId = guildId, CurrentState = "Initial", UpdatedOn = FixedNow,
+        });
+        await sagaHarness.Exists(correlationId, m => m.Syncing);
+
+        // GuildChanged(IsPresent=false) arrives — bot has lost access
+        await harness.Bus.Publish<GuildChanged>(new
+        {
+            GuildId = guildId,
+            Name = string.Empty,
+            Roles = new List<GuildRole>(),
+            IsPresent = false,
+            CurrentState = "Inaccessible",
+            UpdatedOn = FixedNow,
+        });
+
+        // Saga transitions Syncing → Synced (GuildChanged still settles the saga)
+        await sagaHarness.Exists(correlationId, m => m.Synced);
+
+        var saga = sagaHarness.Sagas.Contains(correlationId);
+        saga.ShouldNotBeNull();
+        saga.IsPresent.ShouldBeFalse("GuildChanged(IsPresent=false) must flip saga.IsPresent");
+    }
+
     [Test]
     public async Task New_saga_IsPresent_defaults_to_true()
     {
@@ -585,9 +639,9 @@ public class GuildSagaStateMachineTests
         var correlationId = DeterministicGuid.FromSnowflake(guildId);
         var sagaHarness = harness.GetSagaStateMachineHarness<GuildSagaStateMachine, GuildSagaState>();
 
-        await harness.Bus.Publish<GuildSyncRequested>(new
+        await harness.Bus.Publish<GuildSyncDue>(new
         {
-            GuildId = guildId, CurrentState = "Initial", LastUpdatedAt = FixedNow,
+            GuildId = guildId, CurrentState = "Initial", UpdatedOn = FixedNow,
         });
         await sagaHarness.Exists(correlationId, m => m.Syncing);
 

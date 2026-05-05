@@ -4,7 +4,7 @@ namespace DiscordScraper.Write.Consumers;
 
 /// <summary>
 /// Each consume issues 3 Discord REST calls; the per-endpoint limiter (10 req/s) keeps the
-/// process well below the global bot limit (50 req/s). Outbox makes the ChannelSyncRequested
+/// process well below the global bot limit (50 req/s). Outbox makes the ChannelSyncDue
 /// publishes atomic with the consume ack.
 /// </summary>
 public sealed class GuildSyncConsumerDefinition : ConsumerDefinition<GuildSyncConsumer>

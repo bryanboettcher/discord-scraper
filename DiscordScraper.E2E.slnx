@@ -5,7 +5,7 @@
     <Project Path="src/DiscordScraper.Discord/DiscordScraper.Discord.csproj" />
     <Project Path="src/DiscordScraper.Rendering/DiscordScraper.Rendering.csproj" />
     <Project Path="src/DiscordScraper.Write/DiscordScraper.Write.csproj" />
-    <Project Path="src/DiscordScraper.MessageEnhancement/DiscordScraper.MessageEnhancement.csproj" />
+    <Project Path="src/DiscordScraper.Enrichment/DiscordScraper.Enrichment.csproj" />
     <Project Path="src/DiscordScraper.Read/DiscordScraper.Read.csproj" />
     <Project Path="src/DiscordScraper.Ingester/DiscordScraper.Ingester.csproj" />
     <Project Path="src/DiscordScraper.Api/DiscordScraper.Api.csproj" />

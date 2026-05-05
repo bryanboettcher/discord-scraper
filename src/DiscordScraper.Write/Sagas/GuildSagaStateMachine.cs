@@ -7,10 +7,10 @@ using MassTransit;
 namespace DiscordScraper.Write.Sagas;
 
 /// <summary>
-/// Tracks the sync lifecycle for a guild. GuildSyncRequested transitions to Syncing; GuildChanged
+/// Tracks the sync lifecycle for a guild. GuildSyncDue transitions to Syncing; GuildChanged
 /// (published by GuildSyncConsumer after fetching guild metadata) transitions to Synced. No terminal
 /// state. Pub/sub rather than request/response because GuildSyncConsumer is a fan-out — it publishes
-/// ChannelSyncRequested for each channel plus GuildChanged independently.
+/// ChannelSyncDue for each channel plus GuildChanged independently.
 /// </summary>
 public sealed class GuildSagaStateMachine : MassTransitStateMachine<GuildSagaState>
 {
@@ -18,9 +18,9 @@ public sealed class GuildSagaStateMachine : MassTransitStateMachine<GuildSagaSta
     {
         InstanceState(x => x.CurrentState);
 
-        // InsertOnInitial=true: first GuildSyncRequested upserts in one round-trip rather than
+        // InsertOnInitial=true: first GuildSyncDue upserts in one round-trip rather than
         // insert-then-update, halving Mongo I/O during the initial backfill burst.
-        Event(() => SyncRequested, e =>
+        Event(() => SyncDue, e =>
         {
             e.CorrelateById(ctx => DeterministicGuid.FromSnowflake(ctx.Message.GuildId));
             e.InsertOnInitial = true;
@@ -28,7 +28,6 @@ public sealed class GuildSagaStateMachine : MassTransitStateMachine<GuildSagaSta
             {
                 CorrelationId = DeterministicGuid.FromSnowflake(ctx.Message.GuildId),
                 GuildId = ctx.Message.GuildId,
-                LastUpdatedAt = clock.UtcNow,
             });
         });
 
@@ -50,29 +49,26 @@ public sealed class GuildSagaStateMachine : MassTransitStateMachine<GuildSagaSta
                 && saga.CurrentState != nameof(Syncing));
 
             // Heartbeats that don't match any saga are silently discarded — correct behaviour
-            // since heartbeats never bootstrap new sagas (only SyncRequested does that).
+            // since heartbeats never bootstrap new sagas (only SyncDue does that).
             e.OnMissingInstance(m => m.Discard());
         });
 
         Initially(
-            When(SyncRequested)
+            When(SyncDue)
                 .Then(ctx =>
                 {
                     ctx.Saga.GuildId = ctx.Message.GuildId;
                     ctx.Saga.CorrelationId = DeterministicGuid.FromSnowflake(ctx.Message.GuildId);
                     ctx.Saga.IsPresent = true;
-                    BeginSyncing(ctx.Saga, clock);
                 })
                 .TransitionTo(Syncing));
 
         // Steady-state loop: explicit request or heartbeat pick-up while Synced re-enters Syncing.
         During(Synced,
-            When(SyncRequested)
-                .Then(ctx => BeginSyncing(ctx.Saga, clock))
+            When(SyncDue)
                 .TransitionTo(Syncing),
 
             When(Heartbeat)
-                .Then(ctx => BeginSyncing(ctx.Saga, clock))
                 .TransitionTo(Syncing),
 
             // GuildChanged received while already Synced (e.g., gateway push) — update in place.
@@ -82,27 +78,43 @@ public sealed class GuildSagaStateMachine : MassTransitStateMachine<GuildSagaSta
         During(Syncing,
             When(Changed)
                 .Then(ctx => ApplyChanged(ctx.Saga, ctx.Message, clock))
+                .Then(ctx => SettleSaga(ctx, clock))
                 .TransitionTo(Synced));
-    }
 
-    private static void BeginSyncing(GuildSagaState saga, ISystemClock clock)
-    {
-        saga.LastUpdatedAt = clock.UtcNow;
+        // Catch-all: every event bumps UpdatedOn and initialises CreatedOn once.
+        During(
+            Initial, Syncing, Synced,
+            When(SyncDue).Then(ctx => UpdateSaga(ctx, clock)),
+            When(Changed).Then(ctx => UpdateSaga(ctx, clock)),
+            When(Heartbeat).Then(ctx => UpdateSaga(ctx, clock)));
     }
 
     private static void ApplyChanged(GuildSagaState saga, GuildChanged msg, ISystemClock clock)
     {
         saga.Name = msg.Name;
         saga.Roles = msg.Roles;
+        // Only ratchet to absent — presence is restored via admin action, not via event.
+        // IsPresent=false is the sentinel; IsPresent=true (the default) doesn't restore a revoked saga.
+        if (!msg.IsPresent)
+            saga.IsPresent = false;
         saga.LastSyncedAt = clock.UtcNow;
-        saga.LastUpdatedAt = clock.UtcNow;
     }
+
+    private static void UpdateSaga(BehaviorContext<GuildSagaState> ctx, ISystemClock clock)
+    {
+        var now = clock.UtcNow;
+        if (ctx.Saga.CreatedOn == default) ctx.Saga.CreatedOn = now;
+        ctx.Saga.UpdatedOn = now;
+    }
+
+    private static void SettleSaga(BehaviorContext<GuildSagaState> ctx, ISystemClock clock)
+        => ctx.Saga.SettledOn = clock.UtcNow;
 
     // ReSharper disable UnassignedGetOnlyAutoProperty
     public State Syncing { get; private set; } = null!;
     public State Synced { get; private set; } = null!;
 
-    public Event<GuildSyncRequested> SyncRequested { get; private set; } = null!;
+    public Event<GuildSyncDue> SyncDue { get; private set; } = null!;
     public Event<GuildChanged> Changed { get; private set; } = null!;
     public Event<SyncHeartbeat> Heartbeat { get; private set; } = null!;
 }

@@ -74,7 +74,7 @@ public sealed class ChannelSagaPinPollTests
             CanonicalHash = newHash,
             PinCount = 2,
             ObservedAt = clock.UtcNow,
-            LastUpdatedAt = clock.UtcNow,
+            UpdatedOn = clock.UtcNow,
         });
 
         // Wait for PinSetChanged to be consumed by the saga
@@ -111,7 +111,7 @@ public sealed class ChannelSagaPinPollTests
         {
             ChannelId = TestChannelId, GuildId = TestGuildId,
             CurrentState = "CaughtUp", CanonicalHash = stableHash,
-            PinCount = 1, ObservedAt = clock.UtcNow, LastUpdatedAt = clock.UtcNow,
+            PinCount = 1, ObservedAt = clock.UtcNow, UpdatedOn = clock.UtcNow,
         });
         await Task.Delay(300);
 
@@ -123,7 +123,7 @@ public sealed class ChannelSagaPinPollTests
         {
             ChannelId = TestChannelId, GuildId = TestGuildId,
             CurrentState = "CaughtUp", CanonicalHash = stableHash,
-            PinCount = 1, ObservedAt = clock.UtcNow, LastUpdatedAt = clock.UtcNow,
+            PinCount = 1, ObservedAt = clock.UtcNow, UpdatedOn = clock.UtcNow,
         });
         await Task.Delay(300);
 
@@ -157,10 +157,10 @@ public sealed class ChannelSagaPinPollTests
         scheduleIdFirst.ShouldNotBeNull("Schedule should be armed after first CaughtUp");
 
         // Second sync cycle: re-enter Syncing then back to CaughtUp
-        await harness.Bus.Publish<ChannelSyncRequested>(new
+        await harness.Bus.Publish<ChannelSyncDue>(new
         {
             ChannelId = TestChannelId, GuildId = TestGuildId,
-            CurrentState = "CaughtUp", LastUpdatedAt = clock.UtcNow,
+            CurrentState = "CaughtUp", UpdatedOn = clock.UtcNow,
             CursorSnowflake = 100L,
         });
         await sagaHarness.Exists(ExpectedCorrelationId, m => m.Syncing, TimeSpan.FromSeconds(5));
@@ -168,7 +168,7 @@ public sealed class ChannelSagaPinPollTests
         await harness.Bus.Publish<ChannelSyncCompleted>(new
         {
             ChannelId = TestChannelId, GuildId = TestGuildId,
-            CurrentState = "CaughtUp", LastUpdatedAt = clock.UtcNow,
+            CurrentState = "CaughtUp", UpdatedOn = clock.UtcNow,
             Name = "general", ChannelType = 0, ParentId = (long?)null,
             LastSyncedSnowflake = 200L, MessageCount = 5, IsCaughtUpAtLastPoll = true,
         });
@@ -190,12 +190,12 @@ public sealed class ChannelSagaPinPollTests
 
     private static async Task DriveToCaughtUp(ITestHarness harness, long cursor = 0L)
     {
-        await harness.Bus.Publish<ChannelSyncRequested>(new
+        await harness.Bus.Publish<ChannelSyncDue>(new
         {
             ChannelId = TestChannelId,
             GuildId = TestGuildId,
             CurrentState = "Initial",
-            LastUpdatedAt = DateTimeOffset.UtcNow,
+            UpdatedOn = DateTimeOffset.UtcNow,
             CursorSnowflake = cursor,
         });
 
@@ -204,7 +204,7 @@ public sealed class ChannelSagaPinPollTests
             ChannelId = TestChannelId,
             GuildId = TestGuildId,
             CurrentState = "CaughtUp",
-            LastUpdatedAt = DateTimeOffset.UtcNow,
+            UpdatedOn = DateTimeOffset.UtcNow,
             Name = "general",
             ChannelType = 0,
             ParentId = (long?)null,

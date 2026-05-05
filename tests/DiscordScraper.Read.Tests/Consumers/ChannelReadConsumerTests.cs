@@ -1,12 +1,9 @@
 using System.Collections;
 using DiscordScraper.Contracts.Events.Channel;
 using DiscordScraper.Read.Consumers;
-using DiscordScraper.Read.Data;
 using DiscordScraper.Read.Data.Entities;
+using DiscordScraper.Read.Mapping;
 using MassTransit;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Diagnostics;
-using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 
@@ -22,8 +19,9 @@ public sealed class TestChannelChanged : ChannelChanged
     public string? Topic { get; init; }
     public int ChannelType { get; init; }
     public long? ParentId { get; init; }
+    public bool IsPresent { get; init; } = true;
     public string CurrentState { get; init; } = string.Empty;
-    public DateTimeOffset LastUpdatedAt { get; set; }
+    public DateTimeOffset UpdatedOn { get; set; }
     public Guid CorrelationId => Guid.NewGuid();
 }
 
@@ -33,24 +31,6 @@ public sealed class ChannelReadConsumerTests
     // ---------------------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------------------
-
-    private static IDbContextFactory<ReadDbContext> BuildFactory()
-    {
-        var opts = new DbContextOptionsBuilder<ReadDbContext>()
-            .UseInMemoryDatabase(Guid.NewGuid().ToString())
-            .ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning))
-            .Options;
-        return new FakeReadDbContextFactory(opts);
-    }
-
-    private sealed class FakeReadDbContextFactory(DbContextOptions<ReadDbContext> opts)
-        : IDbContextFactory<ReadDbContext>
-    {
-        public ReadDbContext CreateDbContext() => new(opts);
-
-        public ValueTask<ReadDbContext> CreateDbContextAsync(CancellationToken ct = default) =>
-            ValueTask.FromResult(new ReadDbContext(opts));
-    }
 
     private static ConsumeContext<Batch<ChannelChanged>> BuildBatchContext(
         params ChannelChanged[] events)
@@ -99,34 +79,70 @@ public sealed class ChannelReadConsumerTests
         {
             ChannelId = channelId, GuildId = guildId, Name = name, Topic = topic,
             ChannelType = channelType, ParentId = parentId,
-            CurrentState = "Active", LastUpdatedAt = _testTime,
+            CurrentState = "Active", UpdatedOn = _testTime,
         };
 
+    private static ChannelReadConsumer BuildConsumer(IBulkWriter<ReadChannel> writer) =>
+        new(new MapperlyChannelChangedProjector(), writer, NullLogger<ChannelReadConsumer>.Instance);
+
     // ---------------------------------------------------------------------------
-    // Tests
+    // Projector-level tests (pure event-in / entity-out, no consumer overhead)
+    // ---------------------------------------------------------------------------
+
+    [Test]
+    public void Projector_SingleEvent_YieldsOneReadChannel()
+    {
+        var projector = new MapperlyChannelChangedProjector();
+        var result = projector.Project(MakeEvent(channelId: 42L)).ToList();
+        result.Count.ShouldBe(1);
+        result[0].ChannelId.ShouldBe(42L);
+    }
+
+    [Test]
+    public void Projector_FieldMapping_AllScalarFieldsProjectedCorrectly()
+    {
+        var projector = new MapperlyChannelChangedProjector();
+        var result = projector.Project(MakeEvent(channelId: 999L, guildId: 888L, name: "dev-chat",
+            topic: "all code", channelType: 11, parentId: 12345L)).Single();
+
+        result.ChannelId.ShouldBe(999L);
+        result.GuildId.ShouldBe(888L);
+        result.Name.ShouldBe("dev-chat");
+        result.Topic.ShouldBe("all code");
+        result.Type.ShouldBe((short)11);
+        result.ParentId.ShouldBe(12345L);
+        result.UpdatedAt.ShouldBe(_testTime);
+    }
+
+    [Test]
+    public void Projector_NullTopic_MapsToNullOnReadChannel()
+    {
+        var projector = new MapperlyChannelChangedProjector();
+        projector.Project(MakeEvent(topic: null)).Single().Topic.ShouldBeNull();
+    }
+
+    // ---------------------------------------------------------------------------
+    // Consumer-level tests
     // ---------------------------------------------------------------------------
 
     [Test]
     public async Task SingleEvent_WriterReceivesOneReadChannel()
     {
-        var writer = Substitute.For<IReadBulkWriter>();
-        var consumer = new ChannelReadConsumer(BuildFactory(), writer, NullLogger<ChannelReadConsumer>.Instance);
+        var writer = Substitute.For<IBulkWriter<ReadChannel>>();
+        var consumer = BuildConsumer(writer);
 
         await consumer.Consume(BuildBatchContext(MakeEvent()));
 
         await writer.Received(1).WriteAsync(
-            Arg.Any<ReadDbContext>(),
-            Arg.Any<IDbContextTransaction>(),
-            Arg.Is<IReadOnlyDictionary<Type, IList<object>>>(d =>
-                d.ContainsKey(typeof(ReadChannel)) && d[typeof(ReadChannel)].Count == 1),
+            Arg.Is<IEnumerable<ReadChannel>>(e => e.Count() == 1),
             Arg.Any<CancellationToken>());
     }
 
     [Test]
     public async Task ThreeEvents_WriterReceivesThreeReadChannels()
     {
-        var writer = Substitute.For<IReadBulkWriter>();
-        var consumer = new ChannelReadConsumer(BuildFactory(), writer, NullLogger<ChannelReadConsumer>.Instance);
+        var writer = Substitute.For<IBulkWriter<ReadChannel>>();
+        var consumer = BuildConsumer(writer);
 
         await consumer.Consume(BuildBatchContext(
             MakeEvent(channelId: 1L),
@@ -134,83 +150,28 @@ public sealed class ChannelReadConsumerTests
             MakeEvent(channelId: 3L)));
 
         await writer.Received(1).WriteAsync(
-            Arg.Any<ReadDbContext>(),
-            Arg.Any<IDbContextTransaction>(),
-            Arg.Is<IReadOnlyDictionary<Type, IList<object>>>(d =>
-                d[typeof(ReadChannel)].Count == 3),
+            Arg.Is<IEnumerable<ReadChannel>>(e => e.Count() == 3),
             Arg.Any<CancellationToken>());
     }
 
     [Test]
-    public async Task NullTopic_MapsToNullOnReadChannel()
+    public async Task FieldMapping_AllScalarFieldsProjectedCorrectly()
     {
         ReadChannel? captured = null;
 
-        var writer = Substitute.For<IReadBulkWriter>();
-        writer.When(w => w.WriteAsync(
-                Arg.Any<ReadDbContext>(),
-                Arg.Any<IDbContextTransaction>(),
-                Arg.Any<IReadOnlyDictionary<Type, IList<object>>>(),
-                Arg.Any<CancellationToken>()))
-            .Do(call =>
-            {
-                var dict = call.ArgAt<IReadOnlyDictionary<Type, IList<object>>>(2);
-                captured = (ReadChannel)dict[typeof(ReadChannel)][0];
-            });
+        var writer = Substitute.For<IBulkWriter<ReadChannel>>();
+        writer.When(w => w.WriteAsync(Arg.Any<IEnumerable<ReadChannel>>(), Arg.Any<CancellationToken>()))
+            .Do(call => captured = call.ArgAt<IEnumerable<ReadChannel>>(0).First());
 
-        var consumer = new ChannelReadConsumer(BuildFactory(), writer, NullLogger<ChannelReadConsumer>.Instance);
-        await consumer.Consume(BuildBatchContext(MakeEvent(topic: null)));
+        var evt = MakeEvent(channelId: 999L, guildId: 888L, name: "dev-chat", topic: "all code");
+        await BuildConsumer(writer).Consume(BuildBatchContext(evt));
 
         captured.ShouldNotBeNull();
-        captured.Topic.ShouldBeNull();
-    }
-
-    [Test]
-    public async Task NonNullTopic_MapsToReadChannel()
-    {
-        ReadChannel? captured = null;
-
-        var writer = Substitute.For<IReadBulkWriter>();
-        writer.When(w => w.WriteAsync(
-                Arg.Any<ReadDbContext>(),
-                Arg.Any<IDbContextTransaction>(),
-                Arg.Any<IReadOnlyDictionary<Type, IList<object>>>(),
-                Arg.Any<CancellationToken>()))
-            .Do(call =>
-            {
-                var dict = call.ArgAt<IReadOnlyDictionary<Type, IList<object>>>(2);
-                captured = (ReadChannel)dict[typeof(ReadChannel)][0];
-            });
-
-        var consumer = new ChannelReadConsumer(BuildFactory(), writer, NullLogger<ChannelReadConsumer>.Instance);
-        await consumer.Consume(BuildBatchContext(MakeEvent(topic: "server announcements")));
-
-        captured.ShouldNotBeNull();
-        captured.Topic.ShouldBe("server announcements");
-    }
-
-    [Test]
-    public async Task TextChannel_TypeAndParentIdMappedCorrectly()
-    {
-        ReadChannel? captured = null;
-
-        var writer = Substitute.For<IReadBulkWriter>();
-        writer.When(w => w.WriteAsync(
-                Arg.Any<ReadDbContext>(),
-                Arg.Any<IDbContextTransaction>(),
-                Arg.Any<IReadOnlyDictionary<Type, IList<object>>>(),
-                Arg.Any<CancellationToken>()))
-            .Do(call =>
-            {
-                var dict = call.ArgAt<IReadOnlyDictionary<Type, IList<object>>>(2);
-                captured = (ReadChannel)dict[typeof(ReadChannel)][0];
-            });
-
-        var consumer = new ChannelReadConsumer(BuildFactory(), writer, NullLogger<ChannelReadConsumer>.Instance);
-        // Type=0 (text), ParentId=null (top-level channel)
-        await consumer.Consume(BuildBatchContext(MakeEvent(channelType: 0, parentId: null)));
-
-        captured.ShouldNotBeNull();
+        captured.ChannelId.ShouldBe(999L);
+        captured.GuildId.ShouldBe(888L);
+        captured.Name.ShouldBe("dev-chat");
+        captured.Topic.ShouldBe("all code");
+        captured.UpdatedAt.ShouldBe(_testTime);
         captured.Type.ShouldBe((short)0);
         captured.ParentId.ShouldBeNull();
     }
@@ -220,57 +181,14 @@ public sealed class ChannelReadConsumerTests
     {
         ReadChannel? captured = null;
 
-        var writer = Substitute.For<IReadBulkWriter>();
-        writer.When(w => w.WriteAsync(
-                Arg.Any<ReadDbContext>(),
-                Arg.Any<IDbContextTransaction>(),
-                Arg.Any<IReadOnlyDictionary<Type, IList<object>>>(),
-                Arg.Any<CancellationToken>()))
-            .Do(call =>
-            {
-                var dict = call.ArgAt<IReadOnlyDictionary<Type, IList<object>>>(2);
-                captured = (ReadChannel)dict[typeof(ReadChannel)][0];
-            });
+        var writer = Substitute.For<IBulkWriter<ReadChannel>>();
+        writer.When(w => w.WriteAsync(Arg.Any<IEnumerable<ReadChannel>>(), Arg.Any<CancellationToken>()))
+            .Do(call => captured = call.ArgAt<IEnumerable<ReadChannel>>(0).First());
 
-        var consumer = new ChannelReadConsumer(BuildFactory(), writer, NullLogger<ChannelReadConsumer>.Instance);
-        // Type=11 (PUBLIC_THREAD), ParentId=12345 (parent text channel)
-        await consumer.Consume(BuildBatchContext(MakeEvent(channelType: 11, parentId: 12345L)));
+        await BuildConsumer(writer).Consume(BuildBatchContext(MakeEvent(channelType: 11, parentId: 12345L)));
 
         captured.ShouldNotBeNull();
         captured.Type.ShouldBe((short)11);
         captured.ParentId.ShouldBe(12345L);
-    }
-
-    [Test]
-    public async Task FieldMapping_AllScalarFieldsProjectedCorrectly()
-    {
-        ReadChannel? captured = null;
-
-        var writer = Substitute.For<IReadBulkWriter>();
-        writer.When(w => w.WriteAsync(
-                Arg.Any<ReadDbContext>(),
-                Arg.Any<IDbContextTransaction>(),
-                Arg.Any<IReadOnlyDictionary<Type, IList<object>>>(),
-                Arg.Any<CancellationToken>()))
-            .Do(call =>
-            {
-                var dict = call.ArgAt<IReadOnlyDictionary<Type, IList<object>>>(2);
-                captured = (ReadChannel)dict[typeof(ReadChannel)][0];
-            });
-
-        var evt = MakeEvent(channelId: 999L, guildId: 888L, name: "dev-chat", topic: "all code");
-        var consumer = new ChannelReadConsumer(BuildFactory(), writer, NullLogger<ChannelReadConsumer>.Instance);
-        await consumer.Consume(BuildBatchContext(evt));
-
-        captured.ShouldNotBeNull();
-        captured.ChannelId.ShouldBe(999L);
-        captured.GuildId.ShouldBe(888L);
-        captured.Name.ShouldBe("dev-chat");
-        captured.Topic.ShouldBe("all code");
-        // LastUpdatedAt → UpdatedAt name-mismatch mapping
-        captured.UpdatedAt.ShouldBe(_testTime);
-        // ChannelType → Type name-mismatch mapping
-        captured.Type.ShouldBe((short)0);
-        captured.ParentId.ShouldBeNull();
     }
 }

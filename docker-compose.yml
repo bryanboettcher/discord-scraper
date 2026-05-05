@@ -93,10 +93,11 @@ services:
       RabbitMq__Host: "amqp://rabbitmq:5672"
       RabbitMq__Username: guest
       RabbitMq__Password: guest
-      Ollama__Embedding__BaseUrl: "http://host.docker.internal:11434"
-      Ollama__Embedding__Model: "nomic-embed-text"
-      Ollama__Tagging__BaseUrl: "http://host.docker.internal:11434"
-      Ollama__Tagging__Model: "llama3.1:8b"
+      Ollama__Tag__BaseUrl: "http://host.docker.internal:11434"
+      Ollama__Tag__Model: "nomic-embed-text"
+      Ollama__Tag__VectorSize: "768"
+      Ollama__Classify__BaseUrl: "http://host.docker.internal:11434"
+      Ollama__Classify__Model: "llama3.1:8b"
       OTEL_EXPORTER_OTLP_ENDPOINT: http://aspire-dashboard:18889
     extra_hosts:
       - "host.docker.internal:host-gateway"

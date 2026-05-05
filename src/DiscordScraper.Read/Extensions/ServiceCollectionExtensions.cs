@@ -1,16 +1,21 @@
+using DiscordScraper.Contracts.Events.Channel;
+using DiscordScraper.Contracts.Events.Guild;
+using DiscordScraper.Contracts.Events.Message;
 using DiscordScraper.Core.Graph;
 using DiscordScraper.Core.Queries;
 using DiscordScraper.Core.Search;
 using DiscordScraper.Core.Vector;
 using DiscordScraper.Read.Configuration;
+using DiscordScraper.Read.Consumers;
 using DiscordScraper.Read.Data;
+using DiscordScraper.Read.Data.Entities;
 using DiscordScraper.Read.Graph;
+using DiscordScraper.Read.Mapping;
 using DiscordScraper.Read.Queries;
 using DiscordScraper.Read.Search;
 using DiscordScraper.Read.Vector;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Options;
 using Npgsql;
 using Pgvector.Npgsql;
 
@@ -28,7 +33,7 @@ public static class ReadServiceCollectionExtensions
     {
         services.AddSingleton(sp =>
         {
-            var opts = sp.GetRequiredService<IOptions<PostgresOptions>>().Value;
+            var opts = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<PostgresOptions>>().Value;
             var builder = new NpgsqlDataSourceBuilder(opts.ConnectionString);
             builder.UseVector();
             return builder.Build();
@@ -42,7 +47,8 @@ public static class ReadServiceCollectionExtensions
 
     /// <summary>
     /// Registers the pooled <see cref="ReadDbContext"/> factory, the read-side schema bootstrap,
-    /// and <see cref="ISearchService"/>. Reuses the <see cref="NpgsqlDataSource"/> registered by
+    /// <see cref="ISearchService"/>, the open-generic <see cref="IBulkWriter{TEntity}"/>, and all
+    /// per-table projectors. Reuses the <see cref="NpgsqlDataSource"/> registered by
     /// <see cref="AddReadVectorStore"/> so EF inherits vector type mapping.
     /// </summary>
     public static IServiceCollection AddReadModels(this IServiceCollection services)
@@ -56,9 +62,17 @@ public static class ReadServiceCollectionExtensions
         services.AddHostedService<ReadSchemaInitializer>();
         services.AddSingleton<ISearchService, PgSearchService>();
 
-        // EFCore.BulkExtensions adapter — used by the ReadModelBatchConsumer base class
-        // for batch upserts into the read tables.
-        services.AddSingleton<Consumers.IReadBulkWriter, Consumers.EfCoreBulkWriter>();
+        // Open-generic IBulkWriter<TEntity> — resolves EfCoreBulkWriter<T> for any read entity.
+        services.AddScoped(typeof(IBulkWriter<>), typeof(EfCoreBulkWriter<>));
+
+        // Per-table projectors — stateless, singleton.
+        services.AddSingleton<IBatchProjector<ChannelChanged, ReadChannel>, MapperlyChannelChangedProjector>();
+        services.AddSingleton<IBatchProjector<GuildChanged, ReadGuild>, MapperlyGuildChangedProjector>();
+        services.AddSingleton<IBatchProjector<MessageEnriched, ReadMessage>, MapperlyReadMessageProjector>();
+        services.AddSingleton<IBatchProjector<MessageEnriched, MessageReference>, MapperlyMessageReferenceProjector>();
+        services.AddSingleton<IBatchProjector<MessageEnriched, MessageAttachment>, MapperlyMessageAttachmentProjector>();
+        services.AddSingleton<IBatchProjector<MessageEnriched, MessageEmbed>, MapperlyMessageEmbedProjector>();
+        services.AddSingleton<IBatchProjector<MessageEnriched, MessageTag>, MapperlyMessageTagProjector>();
 
         return services;
     }

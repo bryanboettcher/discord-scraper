@@ -9,7 +9,7 @@ public sealed record GuildSagaSnapshot(
     long GuildId,
     string Name,
     string CurrentState,
-    DateTimeOffset LastUpdatedAt,
+    DateTimeOffset? UpdatedOn,
     DateTimeOffset LastSyncedAt,
     int LastSyncChannelCount,
     int RoleCount);
@@ -33,7 +33,7 @@ public sealed record MessageSagaSnapshot(
     long AuthorId,
     bool AuthorIsBot,
     string CurrentState,
-    DateTimeOffset LastUpdatedAt,
+    DateTimeOffset? UpdatedOn,
     DateTimeOffset MessageCreatedAt,
     DateTimeOffset? EditedTimestamp,
     bool HasPendingEdit,

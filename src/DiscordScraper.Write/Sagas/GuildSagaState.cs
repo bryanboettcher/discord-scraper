@@ -1,5 +1,4 @@
 using DiscordScraper.Contracts;
-using DiscordScraper.Contracts.Events;
 using DiscordScraper.Contracts.Events.Guild;
 using MassTransit;
 
@@ -10,7 +9,7 @@ namespace DiscordScraper.Write.Sagas;
 /// CorrelationId is derived deterministically so any node receiving a GuildId computes
 /// the same value without coordination.
 /// </summary>
-public sealed class GuildSagaState : SagaStateMachineInstance, ISagaVersion, ITimestamped, GuildModelBase
+public sealed class GuildSagaState : SagaStateMachineInstance, ISagaVersion, ITimestamped
 {
     // MT Mongo repo requires parameterless ctor; all init done by the state machine.
     public GuildSagaState() { }
@@ -24,7 +23,10 @@ public sealed class GuildSagaState : SagaStateMachineInstance, ISagaVersion, ITi
     public string CurrentState { get; set; } = string.Empty;
 
     public long GuildId { get; set; }
-    public DateTimeOffset LastUpdatedAt { get; set; }
+
+    public DateTimeOffset CreatedOn  { get; set; }
+    public DateTimeOffset UpdatedOn  { get; set; }
+    public DateTimeOffset? SettledOn  { get; set; }
 
     public string Name { get; set; } = string.Empty;
     public DateTimeOffset LastSyncedAt { get; set; }

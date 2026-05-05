@@ -11,7 +11,7 @@ COPY src/DiscordScraper.Core/DiscordScraper.Core.csproj                   src/Di
 COPY src/DiscordScraper.Discord/DiscordScraper.Discord.csproj             src/DiscordScraper.Discord/
 COPY src/DiscordScraper.Rendering/DiscordScraper.Rendering.csproj         src/DiscordScraper.Rendering/
 COPY src/DiscordScraper.Write/DiscordScraper.Write.csproj                 src/DiscordScraper.Write/
-COPY src/DiscordScraper.MessageEnhancement/DiscordScraper.MessageEnhancement.csproj src/DiscordScraper.MessageEnhancement/
+COPY src/DiscordScraper.Enrichment/DiscordScraper.Enrichment.csproj       src/DiscordScraper.Enrichment/
 COPY src/DiscordScraper.Read/DiscordScraper.Read.csproj                   src/DiscordScraper.Read/
 COPY src/DiscordScraper.ServiceDefaults/DiscordScraper.ServiceDefaults.csproj src/DiscordScraper.ServiceDefaults/
 COPY src/DiscordScraper.Ingester/DiscordScraper.Ingester.csproj           src/DiscordScraper.Ingester/
@@ -20,7 +20,7 @@ COPY src/DiscordScraper.Api/DiscordScraper.Api.csproj                     src/Di
 COPY tests/DiscordScraper.Contracts.Tests/DiscordScraper.Contracts.Tests.csproj                 tests/DiscordScraper.Contracts.Tests/
 COPY tests/DiscordScraper.Rendering.Tests/DiscordScraper.Rendering.Tests.csproj                 tests/DiscordScraper.Rendering.Tests/
 COPY tests/DiscordScraper.Write.Tests/DiscordScraper.Write.Tests.csproj                         tests/DiscordScraper.Write.Tests/
-COPY tests/DiscordScraper.MessageEnhancement.Tests/DiscordScraper.MessageEnhancement.Tests.csproj tests/DiscordScraper.MessageEnhancement.Tests/
+COPY tests/DiscordScraper.Enrichment.Tests/DiscordScraper.Enrichment.Tests.csproj             tests/DiscordScraper.Enrichment.Tests/
 COPY tests/DiscordScraper.Read.Tests/DiscordScraper.Read.Tests.csproj                           tests/DiscordScraper.Read.Tests/
 COPY tests/DiscordScraper.Api.Tests/DiscordScraper.Api.Tests.csproj                             tests/DiscordScraper.Api.Tests/
 

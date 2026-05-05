@@ -1,19 +1,16 @@
 using DiscordScraper.Contracts.Events.Guild;
-using DiscordScraper.Read.Data;
+using DiscordScraper.Read.Data.Entities;
 using DiscordScraper.Read.Mapping;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
 namespace DiscordScraper.Read.Consumers;
 
+/// <summary>
+/// Projects <see cref="GuildChanged"/> events into <see cref="ReadGuild"/> rows,
+/// one row per event.
+/// </summary>
 public sealed class GuildReadConsumer(
-    IDbContextFactory<ReadDbContext> factory,
-    IReadBulkWriter writer,
+    IBatchProjector<GuildChanged, ReadGuild> projector,
+    IBulkWriter<ReadGuild> writer,
     ILogger<GuildReadConsumer> logger)
-    : ReadModelBatchConsumer<GuildChanged>(factory, writer, logger)
-{
-    protected override IEnumerable<object> Project(GuildChanged evt)
-    {
-        yield return GuildReadModelMapper.ToReadGuild(evt);
-    }
-}
+    : ReadModelBatchConsumer<GuildChanged, ReadGuild>(projector, writer, logger);
