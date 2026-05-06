@@ -1,7 +1,7 @@
 namespace DiscordScraper.Contracts.Requests;
 
 // Init-only properties (no positional ctor) — see AnalyzeMessageRequest for the rationale.
-public sealed record ProjectMessageRequest : IStampable
+public sealed record ProjectMessageRequest : IMeasured
 {
     public long MessageSnowflake { get; init; }
     public long ChannelId { get; init; }
@@ -10,4 +10,7 @@ public sealed record ProjectMessageRequest : IStampable
 
     /// <inheritdoc cref="IStampable.Timestamp"/>
     public DateTimeOffset Timestamp { get; set; }
+
+    /// <inheritdoc cref="IMeasured.ReceivedOn"/>
+    public DateTimeOffset ReceivedOn { get; set; }
 }
