@@ -69,6 +69,7 @@ builder.Services.AddSingleton(sp =>
 // --- Discord REST client + Write/Enrichment services ---
 builder.Services.AddDiscordClient();
 builder.Services.AddWriteServices();
+builder.Services.AddCaptureOptions();
 builder.Services.AddEnrichmentClients();
 
 // PgVectorStore + dedicated NpgsqlDataSource with vector type mapping. Must register before

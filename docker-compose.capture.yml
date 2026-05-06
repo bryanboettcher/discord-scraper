@@ -1,0 +1,7 @@
+services:
+  ingester:
+    environment:
+      Capture__Enabled: "true"
+      Capture__OutputPath: "/app/capture"
+    volumes:
+      - ./capture:/app/capture

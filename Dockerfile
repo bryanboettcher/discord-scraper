@@ -23,6 +23,7 @@ COPY tests/DiscordScraper.Write.Tests/DiscordScraper.Write.Tests.csproj         
 COPY tests/DiscordScraper.Enrichment.Tests/DiscordScraper.Enrichment.Tests.csproj             tests/DiscordScraper.Enrichment.Tests/
 COPY tests/DiscordScraper.Read.Tests/DiscordScraper.Read.Tests.csproj                           tests/DiscordScraper.Read.Tests/
 COPY tests/DiscordScraper.Api.Tests/DiscordScraper.Api.Tests.csproj                             tests/DiscordScraper.Api.Tests/
+COPY tests/DiscordScraper.TestSupport/DiscordScraper.TestSupport.csproj                         tests/DiscordScraper.TestSupport/
 
 # Single restore via the solution file pulls everything.
 RUN dotnet restore DiscordScraper.slnx
