@@ -3,13 +3,20 @@
   <ItemGroup>
     <PackageReference Include="Bogus" />
     <PackageReference Include="MassTransit" />
+    <PackageReference Include="MassTransit.MongoDb" />
+    <PackageReference Include="MassTransit.RabbitMQ" />
     <PackageReference Include="MassTransit.TestFramework" />
     <PackageReference Include="Microsoft.Extensions.Hosting" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
+    <PackageReference Include="MongoDB.Driver" />
     <PackageReference Include="NSubstitute" />
     <PackageReference Include="NUnit" />
     <PackageReference Include="Shouldly" />
+    <PackageReference Include="Testcontainers" />
+    <PackageReference Include="Testcontainers.MongoDb" />
+    <PackageReference Include="Testcontainers.PostgreSql" />
+    <PackageReference Include="Testcontainers.RabbitMq" />
   </ItemGroup>
 
   <ItemGroup>

@@ -39,6 +39,7 @@
     <ProjectReference Include="..\..\src\DiscordScraper.Read\DiscordScraper.Read.csproj" />
     <ProjectReference Include="..\..\src\DiscordScraper.Rendering\DiscordScraper.Rendering.csproj" />
     <ProjectReference Include="..\..\src\DiscordScraper.Write\DiscordScraper.Write.csproj" />
+    <ProjectReference Include="..\DiscordScraper.TestSupport\DiscordScraper.TestSupport.csproj" />
   </ItemGroup>
 
 </Project>
