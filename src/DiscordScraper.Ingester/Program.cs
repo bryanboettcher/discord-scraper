@@ -107,8 +107,13 @@ builder.Services.AddMassTransit(x =>
         // Stamp publish-time timestamps into IStampable message bodies. Must register on
         // both pipes: saga Request() sends go through the send pipe, IBus.Publish goes
         // through the publish pipe. RespondAsync is covered via the send pipe for free.
-        cfg.UseSendFilter(typeof(TimestampFilter<>), context);
-        cfg.UsePublishFilter(typeof(TimestampFilter<>), context);
+        cfg.UseSendFilter(typeof(OutboundTimestampFilter<>), context);
+        cfg.UsePublishFilter(typeof(OutboundTimestampFilter<>), context);
+
+        // Stamp receive-time timestamp into IMeasured message bodies. Fires after the
+        // consumer pipeline receives the message; observers reading ReceivedOn must use
+        // PostConsume (PreConsume fires before UseConsumeFilter filters execute).
+        cfg.UseConsumeFilter(typeof(InboundTimestampFilter<>), context);
 
         cfg.UseDelayedMessageScheduler();
         cfg.ConfigureEndpoints(context);

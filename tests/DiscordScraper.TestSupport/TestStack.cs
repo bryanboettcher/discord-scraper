@@ -178,10 +178,11 @@ public sealed class TestStack : IAsyncDisposable
     /// <summary>
     /// Observation sink for test assertions. Available after <see cref="StartAsync"/>.
     ///
-    /// Gap measurement is driven by <see cref="TimestampFilter{T}"/> stamping a publish-time
-    /// timestamp into each <see cref="IStampable"/> message body. <see cref="ITestObservationSink.Consumes"/>
-    /// records <c>PublishedAt</c> (from the message body) and <c>PreConsumedAt</c> (from
-    /// <c>ISystemClock.UtcNow</c> at consume time). No send-side observer is needed.
+    /// Gap measurement is driven by <see cref="OutboundTimestampFilter{T}"/> stamping a publish-time
+    /// timestamp and <see cref="InboundTimestampFilter{T}"/> stamping a receive-time timestamp into
+    /// each <see cref="IMeasured"/> message body. <see cref="ITestObservationSink.Consumes"/>
+    /// records <c>PublishedAt</c> and <c>ReceivedOn</c> from the message body.
+    /// No send-side observer is needed.
     ///
     /// <see cref="ITestObservationSink.QueueDwells"/> similarly uses the stamped body timestamp
     /// when available, falling back to broker <c>SentTime</c> for non-IStampable messages.
@@ -228,8 +229,8 @@ public sealed class TestStack : IAsyncDisposable
 
         // Wire observers after bus start — must be connected before messages flow.
         // QueueDwellObserver via ConnectTo; per-type ResponseConsumeObservers via ConnectResponseObserver.
-        // TimestampFilter<T> is registered on both send+publish pipes in each bus configurator
-        // so no send-side observer is needed — gaps derive from context.Message.Timestamp.
+        // OutboundTimestampFilter<T> stamps Timestamp on send/publish; InboundTimestampFilter<T>
+        // stamps ReceivedOn on consume. Observers read both from PostConsume.
         _observerHandles = ObservationWiring.ConnectTo(_harness.Bus, _provider);
         ObservationWiring.ConnectResponseObserver<AnalyzeMessageResponse>(_harness.Bus, _provider);
         ObservationWiring.ConnectResponseObserver<ProjectMessageResponse>(_harness.Bus, _provider);
@@ -413,12 +414,13 @@ public sealed class TestStack : IAsyncDisposable
             RegisterSagaInMemory(cfg);
             RegisterEnrichmentConsumers(cfg);
 
-            // Explicit UsingInMemory to wire TimestampFilter on both send+publish pipes.
+            // Explicit UsingInMemory to wire outbound+inbound timestamp filters on all pipes.
             // Without this, the default implicit InMemory factory runs without filter hooks.
             cfg.UsingInMemory((ctx, bus) =>
             {
-                bus.UseSendFilter(typeof(TimestampFilter<>), ctx);
-                bus.UsePublishFilter(typeof(TimestampFilter<>), ctx);
+                bus.UseSendFilter(typeof(OutboundTimestampFilter<>), ctx);
+                bus.UsePublishFilter(typeof(OutboundTimestampFilter<>), ctx);
+                bus.UseConsumeFilter(typeof(InboundTimestampFilter<>), ctx);
                 bus.UseDelayedMessageScheduler();
                 bus.ConfigureEndpoints(ctx);
             });
@@ -444,8 +446,9 @@ public sealed class TestStack : IAsyncDisposable
 
             cfg.UsingInMemory((ctx, bus) =>
             {
-                bus.UseSendFilter(typeof(TimestampFilter<>), ctx);
-                bus.UsePublishFilter(typeof(TimestampFilter<>), ctx);
+                bus.UseSendFilter(typeof(OutboundTimestampFilter<>), ctx);
+                bus.UsePublishFilter(typeof(OutboundTimestampFilter<>), ctx);
+                bus.UseConsumeFilter(typeof(InboundTimestampFilter<>), ctx);
                 bus.UseDelayedMessageScheduler();
                 bus.ConfigureEndpoints(ctx);
             });
@@ -473,8 +476,9 @@ public sealed class TestStack : IAsyncDisposable
             cfg.UsingRabbitMq((ctx, rmq) =>
             {
                 rmq.Host(new Uri(rabbitConnStr));
-                rmq.UseSendFilter(typeof(TimestampFilter<>), ctx);
-                rmq.UsePublishFilter(typeof(TimestampFilter<>), ctx);
+                rmq.UseSendFilter(typeof(OutboundTimestampFilter<>), ctx);
+                rmq.UsePublishFilter(typeof(OutboundTimestampFilter<>), ctx);
+                rmq.UseConsumeFilter(typeof(InboundTimestampFilter<>), ctx);
                 rmq.ConfigureEndpoints(ctx);
             });
         });

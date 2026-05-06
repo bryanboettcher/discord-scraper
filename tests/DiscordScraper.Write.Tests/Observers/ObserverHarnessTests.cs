@@ -10,15 +10,16 @@ using NSubstitute;
 namespace DiscordScraper.Write.Tests.Observers;
 
 /// <summary>
-/// Integration tests verifying that <see cref="TimestampFilter{T}"/> stamps message bodies
-/// and that <see cref="ResponseConsumeObserver{TResponse}"/> derives the publish-consume gap
-/// from <c>context.Message.Timestamp</c> without a send-side observer.
+/// Integration tests verifying that <see cref="OutboundTimestampFilter{T}"/> stamps message
+/// bodies on both send and publish pipes, that <see cref="InboundTimestampFilter{T}"/> stamps
+/// <c>ReceivedOn</c> on the consume pipe, and that <see cref="ResponseConsumeObserver{TResponse}"/>
+/// derives the publish-consume gap from <c>context.Message</c> without a send-side observer.
 ///
-/// Transport: InMemory via <see cref="AddMassTransitTestHarness"/>. The filter is registered
-/// on both the send and publish pipes via <c>UsingInMemory</c>.
+/// Transport: InMemory via <see cref="AddMassTransitTestHarness"/>. Filters are registered on
+/// send, publish, and consume pipes via <c>UsingInMemory</c>.
 ///
 /// The synthetic request/response pair (<c>PingRequest</c> / <c>PingResponse</c>) implements
-/// <see cref="IStampable"/> so the filter stamps them and the observer can measure the gap.
+/// <see cref="IMeasured"/> so both filters stamp them and the observer can measure the gap.
 /// </summary>
 [TestFixture]
 public sealed class ObserverHarnessTests
@@ -27,16 +28,18 @@ public sealed class ObserverHarnessTests
     // Synthetic message types — isolated from the real enrichment types.
     // -------------------------------------------------------------------------
 
-    public sealed record PingRequest : IStampable
+    public sealed record PingRequest : IMeasured
     {
         public string Payload { get; init; } = "";
         public DateTimeOffset Timestamp { get; set; }
+        public DateTimeOffset ReceivedOn { get; set; }
     }
 
-    public sealed record PingResponse : IStampable
+    public sealed record PingResponse : IMeasured
     {
         public string Echo { get; init; } = "";
         public DateTimeOffset Timestamp { get; set; }
+        public DateTimeOffset ReceivedOn { get; set; }
     }
 
     private static ISystemClock MakeClock() =>
@@ -57,8 +60,9 @@ public sealed class ObserverHarnessTests
 
             cfg.UsingInMemory((ctx, bus) =>
             {
-                bus.UseSendFilter(typeof(TimestampFilter<>), ctx);
-                bus.UsePublishFilter(typeof(TimestampFilter<>), ctx);
+                bus.UseSendFilter(typeof(OutboundTimestampFilter<>), ctx);
+                bus.UsePublishFilter(typeof(OutboundTimestampFilter<>), ctx);
+                bus.UseConsumeFilter(typeof(InboundTimestampFilter<>), ctx);
                 bus.ConfigureEndpoints(ctx);
             });
         });
@@ -114,7 +118,7 @@ public sealed class ObserverHarnessTests
             var consumed = harness.Consumed.Select<PingRequest>().FirstOrDefault(x => x.Context.RequestId == requestId);
             consumed.ShouldNotBeNull("PingRequest should have been consumed");
             consumed!.Context.Message.Timestamp.ShouldNotBe(default,
-                "TimestampFilter must stamp a non-zero Timestamp before the message reaches the consumer");
+                "OutboundTimestampFilter must stamp a non-zero Timestamp before the message reaches the consumer");
         }
         finally
         {
@@ -125,7 +129,42 @@ public sealed class ObserverHarnessTests
     }
 
     // -------------------------------------------------------------------------
-    // ResponseConsumeObserver records a gap when the response is IStampable
+    // InboundTimestampFilter stamps ReceivedOn + TransportLatency is non-negative
+    // -------------------------------------------------------------------------
+
+    [Test]
+    public async Task InboundTimestampFilter_StampsReceivedOn_AndTransportLatencyNonNegative()
+    {
+        await using var provider = BuildProvider();
+        var harness = provider.GetRequiredService<ITestHarness>();
+        await harness.Start();
+
+        var (handles, responseHandle) = WireObservers(harness, provider);
+
+        try
+        {
+            var requestId = await SendRequestViaBus(harness, "received-on-test");
+            await harness.Consumed.Any<PingRequest>(x => x.Context.RequestId == requestId);
+
+            var consumed = harness.Consumed.Select<PingRequest>().FirstOrDefault(x => x.Context.RequestId == requestId);
+            consumed.ShouldNotBeNull("PingRequest should have been consumed");
+
+            var msg = consumed!.Context.Message;
+            msg.Timestamp.ShouldNotBe(default, "OutboundTimestampFilter must stamp Timestamp");
+            msg.ReceivedOn.ShouldNotBe(default, "InboundTimestampFilter must stamp ReceivedOn on the consume pipe");
+            ((IMeasured)msg).TransportLatency.ShouldBeGreaterThanOrEqualTo(TimeSpan.Zero,
+                "TransportLatency (ReceivedOn - Timestamp) must be non-negative");
+        }
+        finally
+        {
+            await harness.Stop();
+            responseHandle?.Dispose();
+            foreach (var h in handles) h.Dispose();
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // ResponseConsumeObserver records a gap when the response is IMeasured
     // -------------------------------------------------------------------------
 
     [Test]
@@ -151,9 +190,9 @@ public sealed class ObserverHarnessTests
             {
                 record.MessageType.ShouldBe(typeof(PingResponse));
                 record.PublishedAt.ShouldNotBe(default,
-                    "PublishedAt must be derived from IStampable.Timestamp stamped by TimestampFilter");
+                    "PublishedAt must be derived from IMeasured.Timestamp stamped by OutboundTimestampFilter");
                 record.Gap.ShouldBeGreaterThanOrEqualTo(TimeSpan.Zero,
-                    "Gap (PreConsumedAt - PublishedAt) must be non-negative");
+                    "Gap (ReceivedOn - Timestamp) must be non-negative");
             }
             // If no consume record yet (response routing in loopback can be async), that's
             // acceptable — the test validates the path when the response is observable.

@@ -1,3 +1,4 @@
+using DiscordScraper.Contracts;
 using DiscordScraper.Contracts.Clock;
 using MassTransit;
 using Microsoft.Extensions.DependencyInjection;
@@ -26,9 +27,10 @@ namespace DiscordScraper.TestSupport.Observers;
 /// ObservationWiring.ConnectResponseObserver&lt;AnalyzeMessageResponse&gt;(harness.Bus, provider);
 /// </code>
 ///
-/// Gap measurement relies on <see cref="Filters.TimestampFilter{T}"/> stamping a publish-time
-/// timestamp into each <see cref="IStampable"/> message body. Register the filter on both send
-/// and publish pipes in the bus factory configurator so all outbound paths are covered.
+/// Gap measurement relies on <see cref="Filters.OutboundTimestampFilter{T}"/> stamping a
+/// publish-time timestamp and <see cref="Filters.InboundTimestampFilter{T}"/> stamping a
+/// receive-time timestamp into each <see cref="IMeasured"/> message body. Register both
+/// filters on send/publish/consume pipes in the bus factory configurator.
 /// </summary>
 public static class ObservationServiceCollectionExtensions
 {
@@ -62,9 +64,7 @@ public sealed class ObservationBuilder(IServiceCollection services)
     public ObservationBuilder ForResponseType<TResponse>() where TResponse : class
     {
         services.AddSingleton<ResponseConsumeObserver<TResponse>>(sp =>
-            new ResponseConsumeObserver<TResponse>(
-                sp.GetRequiredService<ITestObservationSink>(),
-                sp.GetRequiredService<ISystemClock>()));
+            new ResponseConsumeObserver<TResponse>(sp.GetRequiredService<ITestObservationSink>()));
         return this;
     }
 
