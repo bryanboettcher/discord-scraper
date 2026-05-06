@@ -1,1 +1,3 @@
-// Placeholder: Test observers and event collectors will land here.
+// Observers/: ITestObservationSink, TestObservationSink, RequestSendObserver,
+// ResponseConsumeObserver<T>, QueueDwellObserver, ObservationMetrics,
+// ObservationServiceCollectionExtensions.
