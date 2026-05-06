@@ -3,16 +3,18 @@ using System.Collections.Concurrent;
 namespace DiscordScraper.TestSupport.Observers;
 
 /// <summary>
-/// Accumulates timestamped observation events from MT send/consume observers so tests
-/// can measure the gap between request publish and response consume.
+/// Accumulates timestamped observation events from MT consume observers so tests can measure
+/// the gap between request publish (stamped into the message body by
+/// <see cref="Filters.TimestampFilter{T}"/>) and response consume.
 ///
 /// All methods are thread-safe; observer callbacks fire from concurrent MT dispatch threads.
 ///
 /// Terminology:
-///   "request pair"  — a matched (PostSend, PreConsume) tuple joined on RequestId.
-///   "queue dwell"   — time a message spent waiting in the broker queue before consume started.
-///   "gap"           — the observable superset of queue dwell plus any consumer processing before
-///                     PreConsume fires; in practice it equals PostSend → PreConsume delta.
+///   "gap"        — <c>PublishedAt → PreConsumedAt</c>; derived entirely from
+///                  <c>context.Message.Timestamp</c> (publish moment) and <c>clock.UtcNow</c>
+///                  at PreConsume. No separate send-side observer needed.
+///   "queue dwell" — enqueued-at (from <c>IStampable.Timestamp</c> or broker <c>SentTime</c>)
+///                  to PreConsume; meaningful on transports that populate these signals.
 /// </summary>
 public interface ITestObservationSink
 {
@@ -20,11 +22,12 @@ public interface ITestObservationSink
     // Write side — called by observers
     // -------------------------------------------------------------------------
 
-    /// <summary>Records the PostSend timestamp for a request-type message.</summary>
-    void RecordSend(Guid requestId, Type messageType, DateTimeOffset timestamp);
-
-    /// <summary>Records the PreConsume and PostConsume timestamps for a response-type message.</summary>
-    void RecordConsume(Guid requestId, Type messageType, DateTimeOffset preConsumeAt, DateTimeOffset postConsumeAt);
+    /// <summary>
+    /// Records the gap between publish (<paramref name="publishedAt"/> from
+    /// <c>IStampable.Timestamp</c>) and consume (<paramref name="preConsumeAt"/> from
+    /// <c>clock.UtcNow</c> at PreConsume) for a response-type message.
+    /// </summary>
+    void RecordConsume(Guid requestId, Type messageType, DateTimeOffset publishedAt, DateTimeOffset preConsumeAt);
 
     /// <summary>
     /// Records a general consume event keyed on MessageId (not RequestId).
@@ -36,9 +39,6 @@ public interface ITestObservationSink
     // Query side — used by test assertions
     // -------------------------------------------------------------------------
 
-    /// <summary>All recorded send events, keyed by RequestId.</summary>
-    IReadOnlyDictionary<Guid, SendRecord> Sends { get; }
-
     /// <summary>All recorded consume events, keyed by RequestId.</summary>
     IReadOnlyDictionary<Guid, ConsumeRecord> Consumes { get; }
 
@@ -46,32 +46,25 @@ public interface ITestObservationSink
     IReadOnlyDictionary<Guid, QueueDwellRecord> QueueDwells { get; }
 
     /// <summary>
-    /// PostSend → PreConsume delta for a single request.
-    /// Throws <see cref="InvalidOperationException"/> if either side is not yet recorded.
+    /// <c>PublishedAt → PreConsumedAt</c> delta for all recorded responses of type
+    /// <typeparamref name="TResponse"/>. Only includes entries where both timestamps are
+    /// available (i.e. the message implemented <c>IStampable</c> and the filter ran).
     /// </summary>
-    TimeSpan GapForRequest(Guid requestId);
-
-    /// <summary>PostSend → PreConsume deltas for every recorded pair whose send type is <typeparamref name="TRequest"/>.</summary>
-    IReadOnlyList<TimeSpan> GapsForType<TRequest>() where TRequest : class;
+    IReadOnlyList<TimeSpan> GapsForType<TResponse>() where TResponse : class;
 
     /// <summary>
-    /// Fails the test if any recorded request-response gap exceeds <paramref name="threshold"/>.
-    /// Gaps are only evaluated for pairs where both a send and a consume have been recorded.
+    /// Fails the test if any recorded response gap exceeds <paramref name="threshold"/>.
+    /// Gaps are only evaluated for pairs where a publish timestamp was captured.
     /// </summary>
     void AssertNoGapsExceeding(TimeSpan threshold);
-
-    /// <summary>
-    /// Fails the test if any request that was recorded as sent does not have a corresponding
-    /// consume record, or if its gap exceeds <paramref name="threshold"/>.
-    /// </summary>
-    void AssertAllConsumedWithin(TimeSpan threshold);
 }
 
-/// <summary>A single PostSend observation for a request-type message.</summary>
-public sealed record SendRecord(Guid RequestId, Type MessageType, DateTimeOffset PostSentAt);
-
-/// <summary>A single PreConsume+PostConsume observation for a response-type message.</summary>
-public sealed record ConsumeRecord(Guid RequestId, Type MessageType, DateTimeOffset PreConsumedAt, DateTimeOffset PostConsumedAt);
+/// <summary>A single PreConsume observation for a response-type message, including the publish timestamp.</summary>
+public sealed record ConsumeRecord(Guid RequestId, Type MessageType, DateTimeOffset PublishedAt, DateTimeOffset PreConsumedAt)
+{
+    /// <summary>End-to-end gap from publish to consume start.</summary>
+    public TimeSpan Gap => PreConsumedAt - PublishedAt;
+}
 
 /// <summary>A queue-dwell observation for a non-request-response message (e.g. read-side events).</summary>
 public sealed record QueueDwellRecord(Guid MessageId, Type MessageType, DateTimeOffset EnqueuedAt, DateTimeOffset PreConsumedAt)

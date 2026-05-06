@@ -1,6 +1,6 @@
 namespace DiscordScraper.Contracts.Requests;
 
-public sealed record ClassifyMessageRequest
+public sealed record ClassifyMessageRequest : IStampable
 {
     public long MessageSnowflake { get; init; }
     public long GuildId { get; init; }
@@ -10,4 +10,7 @@ public sealed record ClassifyMessageRequest
     public string PlainText { get; init; } = string.Empty;
     /// <summary>Embedding vector computed by the preceding Tag phase. Forwarded to the vector store.</summary>
     public IReadOnlyList<float> Embedding { get; init; } = [];
+
+    /// <inheritdoc cref="IStampable.Timestamp"/>
+    public DateTimeOffset Timestamp { get; set; }
 }

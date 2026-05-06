@@ -1,4 +1,5 @@
 using DiscordScraper.Contracts.Clock;
+using DiscordScraper.Contracts.Filters;
 using DiscordScraper.Core.Configuration;
 using DiscordScraper.Discord.Extensions;
 using DiscordScraper.Enrichment;
@@ -102,6 +103,12 @@ builder.Services.AddMassTransit(x =>
             h.Username(opts.Username);
             h.Password(opts.Password);
         });
+
+        // Stamp publish-time timestamps into IStampable message bodies. Must register on
+        // both pipes: saga Request() sends go through the send pipe, IBus.Publish goes
+        // through the publish pipe. RespondAsync is covered via the send pipe for free.
+        cfg.UseSendFilter(typeof(TimestampFilter<>), context);
+        cfg.UsePublishFilter(typeof(TimestampFilter<>), context);
 
         cfg.UseDelayedMessageScheduler();
         cfg.ConfigureEndpoints(context);

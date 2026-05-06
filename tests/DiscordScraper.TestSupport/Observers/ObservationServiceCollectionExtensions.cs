@@ -1,3 +1,4 @@
+using DiscordScraper.Contracts.Clock;
 using MassTransit;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -21,27 +22,28 @@ namespace DiscordScraper.TestSupport.Observers;
 /// <code>
 /// var harness = provider.GetRequiredService&lt;ITestHarness&gt;();
 /// await harness.Start();
-/// var sink = provider.GetRequiredService&lt;ITestObservationSink&gt;();
-/// ObservationWiring.ConnectTo(harness.Bus, provider, sink);
+/// ObservationWiring.ConnectTo(harness.Bus, provider);
+/// ObservationWiring.ConnectResponseObserver&lt;AnalyzeMessageResponse&gt;(harness.Bus, provider);
 /// </code>
+///
+/// Gap measurement relies on <see cref="Filters.TimestampFilter{T}"/> stamping a publish-time
+/// timestamp into each <see cref="IStampable"/> message body. Register the filter on both send
+/// and publish pipes in the bus factory configurator so all outbound paths are covered.
 /// </summary>
 public static class ObservationServiceCollectionExtensions
 {
     /// <summary>
     /// Registers a singleton <see cref="TestObservationSink"/> as both
-    /// <see cref="ITestObservationSink"/> and <see cref="TestObservationSink"/> (for Reset()),
-    /// and registers the <see cref="RequestSendObserver"/>.
+    /// <see cref="ITestObservationSink"/> and <see cref="TestObservationSink"/> (for Reset()).
     ///
-    /// Call <see cref="ForResponseType{TResponse}"/> on the returned builder to add per-type
-    /// consume observers.
+    /// Call <see cref="ObservationBuilder.ForResponseType{TResponse}"/> on the returned builder
+    /// to add per-type consume observers.
     /// </summary>
     public static ObservationBuilder AddTestObservation(this IServiceCollection services)
     {
         var sink = new TestObservationSink();
         services.AddSingleton<ITestObservationSink>(sink);
         services.AddSingleton(sink);
-        services.AddSingleton<RequestSendObserver>(sp =>
-            new RequestSendObserver(sp.GetRequiredService<ITestObservationSink>()));
         return new ObservationBuilder(services);
     }
 }
@@ -60,7 +62,9 @@ public sealed class ObservationBuilder(IServiceCollection services)
     public ObservationBuilder ForResponseType<TResponse>() where TResponse : class
     {
         services.AddSingleton<ResponseConsumeObserver<TResponse>>(sp =>
-            new ResponseConsumeObserver<TResponse>(sp.GetRequiredService<ITestObservationSink>()));
+            new ResponseConsumeObserver<TResponse>(
+                sp.GetRequiredService<ITestObservationSink>(),
+                sp.GetRequiredService<ISystemClock>()));
         return this;
     }
 
@@ -70,7 +74,9 @@ public sealed class ObservationBuilder(IServiceCollection services)
     public ObservationBuilder WithQueueDwellObserver()
     {
         services.AddSingleton<QueueDwellObserver>(sp =>
-            new QueueDwellObserver(sp.GetRequiredService<ITestObservationSink>()));
+            new QueueDwellObserver(
+                sp.GetRequiredService<ITestObservationSink>(),
+                sp.GetRequiredService<ISystemClock>()));
         return this;
     }
 }
@@ -91,17 +97,10 @@ public static class ObservationWiring
     {
         var handles = new List<ConnectHandle>();
 
-        var sendObserver = provider.GetService<RequestSendObserver>();
-        if (sendObserver is not null)
-            handles.Add(bus.ConnectSendObserver(sendObserver));
-
         var dwellObserver = provider.GetService<QueueDwellObserver>();
         if (dwellObserver is not null)
             handles.Add(bus.ConnectConsumeObserver(dwellObserver));
 
-        // Consume-message observers for each registered response type are connected via the
-        // IConsumeMessageObserver<T> method. Callers that used ForResponseType<T> can retrieve
-        // and connect these manually, or use the typed extension below.
         return handles.ToArray();
     }
 

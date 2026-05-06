@@ -1,6 +1,7 @@
 using System.Reflection;
 using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Contracts.Configuration;
+using DiscordScraper.Contracts.Filters;
 using DiscordScraper.Contracts.Requests;
 using DiscordScraper.Core.Vector;
 using DiscordScraper.Enrichment.Ollama;
@@ -174,7 +175,17 @@ public sealed class TestStack : IAsyncDisposable
     // Observable accessor
     // -------------------------------------------------------------------------
 
-    /// <summary>Observation sink for test assertions. Available after <see cref="StartAsync"/>.</summary>
+    /// <summary>
+    /// Observation sink for test assertions. Available after <see cref="StartAsync"/>.
+    ///
+    /// Gap measurement is driven by <see cref="TimestampFilter{T}"/> stamping a publish-time
+    /// timestamp into each <see cref="IStampable"/> message body. <see cref="ITestObservationSink.Consumes"/>
+    /// records <c>PublishedAt</c> (from the message body) and <c>PreConsumedAt</c> (from
+    /// <c>ISystemClock.UtcNow</c> at consume time). No send-side observer is needed.
+    ///
+    /// <see cref="ITestObservationSink.QueueDwells"/> similarly uses the stamped body timestamp
+    /// when available, falling back to broker <c>SentTime</c> for non-IStampable messages.
+    /// </summary>
     public ITestObservationSink Observations
     {
         get
@@ -215,7 +226,10 @@ public sealed class TestStack : IAsyncDisposable
         _harness = _provider.GetRequiredService<ITestHarness>();
         await _harness.Start();
 
-        // Wire observers after bus start — must be connected before messages flow
+        // Wire observers after bus start — must be connected before messages flow.
+        // QueueDwellObserver via ConnectTo; per-type ResponseConsumeObservers via ConnectResponseObserver.
+        // TimestampFilter<T> is registered on both send+publish pipes in each bus configurator
+        // so no send-side observer is needed — gaps derive from context.Message.Timestamp.
         _observerHandles = ObservationWiring.ConnectTo(_harness.Bus, _provider);
         ObservationWiring.ConnectResponseObserver<AnalyzeMessageResponse>(_harness.Bus, _provider);
         ObservationWiring.ConnectResponseObserver<ProjectMessageResponse>(_harness.Bus, _provider);
@@ -398,6 +412,16 @@ public sealed class TestStack : IAsyncDisposable
         {
             RegisterSagaInMemory(cfg);
             RegisterEnrichmentConsumers(cfg);
+
+            // Explicit UsingInMemory to wire TimestampFilter on both send+publish pipes.
+            // Without this, the default implicit InMemory factory runs without filter hooks.
+            cfg.UsingInMemory((ctx, bus) =>
+            {
+                bus.UseSendFilter(typeof(TimestampFilter<>), ctx);
+                bus.UsePublishFilter(typeof(TimestampFilter<>), ctx);
+                bus.UseDelayedMessageScheduler();
+                bus.ConfigureEndpoints(ctx);
+            });
         });
     }
 
@@ -417,6 +441,14 @@ public sealed class TestStack : IAsyncDisposable
         {
             RegisterSagaWithMongo(cfg);
             RegisterEnrichmentConsumers(cfg);
+
+            cfg.UsingInMemory((ctx, bus) =>
+            {
+                bus.UseSendFilter(typeof(TimestampFilter<>), ctx);
+                bus.UsePublishFilter(typeof(TimestampFilter<>), ctx);
+                bus.UseDelayedMessageScheduler();
+                bus.ConfigureEndpoints(ctx);
+            });
         });
     }
 
@@ -435,14 +467,16 @@ public sealed class TestStack : IAsyncDisposable
         // ITestHarness for InactivityTask / Consumed / Published queries.
         services.AddMassTransitTestHarness(cfg =>
         {
+            RegisterSagaWithMongo(cfg);
+            RegisterEnrichmentConsumers(cfg);
+
             cfg.UsingRabbitMq((ctx, rmq) =>
             {
                 rmq.Host(new Uri(rabbitConnStr));
+                rmq.UseSendFilter(typeof(TimestampFilter<>), ctx);
+                rmq.UsePublishFilter(typeof(TimestampFilter<>), ctx);
                 rmq.ConfigureEndpoints(ctx);
             });
-
-            RegisterSagaWithMongo(cfg);
-            RegisterEnrichmentConsumers(cfg);
         });
     }
 

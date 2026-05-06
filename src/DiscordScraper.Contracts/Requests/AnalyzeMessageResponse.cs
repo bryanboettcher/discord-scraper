@@ -1,8 +1,11 @@
 namespace DiscordScraper.Contracts.Requests;
 
-public sealed record AnalyzeMessageResponse
+public sealed record AnalyzeMessageResponse : IStampable
 {
     public bool IsSubstantive { get; init; }
     public bool IsBot { get; init; }
     public string? DetectedLanguage { get; init; }
+
+    /// <inheritdoc cref="IStampable.Timestamp"/>
+    public DateTimeOffset Timestamp { get; set; }
 }

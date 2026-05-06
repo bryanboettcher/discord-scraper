@@ -10,9 +10,12 @@ namespace DiscordScraper.Contracts.Requests;
 ///
 /// Init-only properties — positional ctors break ctx.Init&lt;T&gt; with anonymous objects.
 /// </summary>
-public sealed record ClassifyMessageResponse
+public sealed record ClassifyMessageResponse : IStampable
 {
     public IReadOnlyList<string> Tags { get; init; } = [];
     public string ClassifyModelVersion { get; init; } = string.Empty;
     public DateTimeOffset IndexedAt { get; init; }
+
+    /// <inheritdoc cref="IStampable.Timestamp"/>
+    public DateTimeOffset Timestamp { get; set; }
 }

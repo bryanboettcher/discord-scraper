@@ -1,3 +1,5 @@
+using DiscordScraper.Contracts;
+using DiscordScraper.Contracts.Clock;
 using MassTransit;
 
 namespace DiscordScraper.TestSupport.Observers;
@@ -7,27 +9,41 @@ namespace DiscordScraper.TestSupport.Observers;
 /// messages, primarily the read-side <c>BatchProjectionPipeline</c> consumers.
 ///
 /// Join key: <c>MessageId</c> (not <c>RequestId</c>) because these messages are not part
-/// of a request-response pair. <c>SentTime</c> on the <c>ReceiveContext</c> reflects when the
-/// broker accepted the message (the enqueue timestamp); <c>PreConsume</c> fires when MT begins
-/// dispatching to the consumer. The delta is the broker queue-dwell time.
+/// of a request-response pair.
 ///
-/// If <c>SentTime</c> is null (some transports don't populate it), the record is still written
-/// with <c>EnqueuedAt = DateTimeOffset.MinValue</c> so it appears in <see cref="ITestObservationSink.QueueDwells"/>
-/// and can be noticed rather than silently dropped.
+/// Enqueued-at priority:
+/// 1. <c>context.Message is IStampable { Timestamp.Ticks: &gt; 0 }</c> — stamped by
+///    <see cref="Filters.TimestampFilter{T}"/> at publish time. Works across all transports.
+/// 2. <c>context.SentTime</c> — broker-reported accept time. Non-null on RabbitMQ; null on
+///    InMemory transport.
+/// 3. <c>DateTimeOffset.MinValue</c> — sentinel when no enqueued-at signal is available
+///    (InMemory + non-IStampable). The record still appears in
+///    <see cref="ITestObservationSink.QueueDwells"/> so callers can notice rather than miss it.
+///    Filter by <c>EnqueuedAt != DateTimeOffset.MinValue</c> to exclude these from dwell analysis.
 /// </summary>
-public sealed class QueueDwellObserver(ITestObservationSink sink, TimeProvider? timeProvider = null)
+public sealed class QueueDwellObserver(ITestObservationSink sink, ISystemClock clock)
     : IConsumeObserver
 {
-    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
-
     public Task PreConsume<T>(ConsumeContext<T> context) where T : class
     {
         var messageId = context.MessageId ?? Guid.NewGuid();
-        var enqueued = context.SentTime.HasValue
-            ? new DateTimeOffset(context.SentTime.Value, TimeSpan.Zero)
-            : DateTimeOffset.MinValue;
+        var preConsumeAt = clock.UtcNow;
 
-        sink.RecordQueueDwell(messageId, typeof(T), enqueued, _time.GetUtcNow());
+        DateTimeOffset enqueued;
+        if (context.Message is IStampable { Timestamp.Ticks: > 0 } stampable)
+        {
+            enqueued = stampable.Timestamp;
+        }
+        else if (context.SentTime.HasValue)
+        {
+            enqueued = new DateTimeOffset(context.SentTime.Value, TimeSpan.Zero);
+        }
+        else
+        {
+            enqueued = DateTimeOffset.MinValue;
+        }
+
+        sink.RecordQueueDwell(messageId, typeof(T), enqueued, preConsumeAt);
         return Task.CompletedTask;
     }
 
