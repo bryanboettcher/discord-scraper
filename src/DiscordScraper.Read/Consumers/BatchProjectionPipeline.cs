@@ -4,30 +4,33 @@ using Microsoft.Extensions.Logging;
 namespace DiscordScraper.Read.Consumers;
 
 /// <summary>
-/// Generic base for read-side batch consumers. Accepts <see cref="Batch{TEvent}"/>, projects
-/// each event into zero or more <typeparamref name="TEntity"/> instances via
-/// <see cref="IBatchProjector{TEvent,TEntity}"/>, and writes the accumulated set once per batch
-/// via <see cref="IBulkWriter{TEntity}"/>.
+/// Reusable batch-projection behavior. Each concrete read-side consumer is a thin
+/// <see cref="IConsumer{Batch}"/> wrapper that delegates to <see cref="Project"/>.
+///
+/// <para>
+/// Composition over inheritance. The previous abstract <c>ReadModelBatchConsumer</c>
+/// base was scanned by MT's assembly registration and its open-generic abstract type
+/// produced runtime "Instances of abstract classes cannot be created" failures during
+/// consume. Registering this pipeline as an open generic in DI avoids any abstract
+/// IConsumer in the scanned assembly.
+/// </para>
 ///
 /// <para>
 /// <b>Eventual consistency note</b>: each concrete consumer commits its own transaction.
 /// A message that fans into five projections (ReadMessage, MessageReference, MessageAttachment,
 /// MessageEmbed, MessageTag) will have those rows written by five independent transactions.
 /// A query at exactly the wrong moment may see a partial message — ReadMessage exists but its
-/// tags have not yet committed. For this read side (eventually consistent, no read-after-publish
-/// guarantee), this is acceptable. If per-event atomicity is required in future, collapse the
-/// five consumers back into a single multi-table consumer.
+/// tags have not yet committed. Acceptable for an eventually-consistent read side.
 /// </para>
 /// </summary>
-public abstract class ReadModelBatchConsumer<TEvent, TEntity>(
+public sealed class BatchProjectionPipeline<TEvent, TEntity>(
     IBatchProjector<TEvent, TEntity> projector,
     IBulkWriter<TEntity> writer,
-    ILogger logger)
-    : IConsumer<Batch<TEvent>>
+    ILogger<BatchProjectionPipeline<TEvent, TEntity>> logger)
     where TEvent : class
     where TEntity : class
 {
-    public async Task Consume(ConsumeContext<Batch<TEvent>> context)
+    public async Task Project(ConsumeContext<Batch<TEvent>> context)
     {
         var ct = context.CancellationToken;
 

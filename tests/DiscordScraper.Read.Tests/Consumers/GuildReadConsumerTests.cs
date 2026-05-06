@@ -71,7 +71,10 @@ public sealed class GuildReadConsumerTests
         new() { GuildId = guildId, Name = name, CurrentState = "Active", UpdatedOn = _testTime };
 
     private static GuildReadConsumer BuildConsumer(IBulkWriter<ReadGuild> writer) =>
-        new(new MapperlyGuildChangedProjector(), writer, NullLogger<GuildReadConsumer>.Instance);
+        new(new BatchProjectionPipeline<GuildChanged, ReadGuild>(
+            new MapperlyGuildChangedProjector(),
+            writer,
+            NullLogger<BatchProjectionPipeline<GuildChanged, ReadGuild>>.Instance));
 
     // ---------------------------------------------------------------------------
     // Projector-level tests (pure event-in / entity-out, no consumer overhead)

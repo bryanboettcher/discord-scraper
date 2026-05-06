@@ -65,6 +65,10 @@ public static class ReadServiceCollectionExtensions
         // Open-generic IBulkWriter<TEntity> — resolves EfCoreBulkWriter<T> for any read entity.
         services.AddScoped(typeof(IBulkWriter<>), typeof(EfCoreBulkWriter<>));
 
+        // Open-generic BatchProjectionPipeline<TEvent,TEntity> — DI closes per request,
+        // injected into each thin concrete read-side consumer.
+        services.AddScoped(typeof(BatchProjectionPipeline<,>));
+
         // Per-table projectors — stateless, singleton.
         services.AddSingleton<IBatchProjector<ChannelChanged, ReadChannel>, MapperlyChannelChangedProjector>();
         services.AddSingleton<IBatchProjector<GuildChanged, ReadGuild>, MapperlyGuildChangedProjector>();

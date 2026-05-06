@@ -14,26 +14,13 @@ public sealed record TestBatchEvent(string Kind);
 public sealed class TestEntityA { public string Value { get; init; } = ""; }
 
 /// <summary>
-/// Unit tests for <see cref="ReadModelBatchConsumer{TEvent,TEntity}"/> accumulation and
+/// Unit tests for <see cref="BatchProjectionPipeline{TEvent,TEntity}"/> accumulation and
 /// dispatch logic. The write path is hidden behind <see cref="IBulkWriter{TEntity}"/> and
 /// substituted here.
 /// </summary>
 [TestFixture]
-public sealed class ReadModelBatchConsumerBaseTests
+public sealed class BatchProjectionPipelineTests
 {
-    // ---------------------------------------------------------------------------
-    // Test doubles
-    // ---------------------------------------------------------------------------
-
-    /// <summary>
-    /// Concrete consumer for testing. Kind controls output:
-    /// "emit" → one TestEntityA, anything else → empty.
-    /// </summary>
-    private sealed class TestBatchConsumer(
-        IBatchProjector<TestBatchEvent, TestEntityA> projector,
-        IBulkWriter<TestEntityA> writer)
-        : ReadModelBatchConsumer<TestBatchEvent, TestEntityA>(projector, writer, NullLogger.Instance);
-
     private sealed class TestProjector(string emitKind = "emit")
         : IBatchProjector<TestBatchEvent, TestEntityA>
     {
@@ -43,10 +30,6 @@ public sealed class ReadModelBatchConsumerBaseTests
                 yield return new TestEntityA { Value = evt.Kind };
         }
     }
-
-    // ---------------------------------------------------------------------------
-    // Helpers
-    // ---------------------------------------------------------------------------
 
     private static ConsumeContext<Batch<TestBatchEvent>> BuildBatchContext(
         params TestBatchEvent[] events)
@@ -81,20 +64,17 @@ public sealed class ReadModelBatchConsumerBaseTests
         IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
-    private static TestBatchConsumer BuildConsumer(IBulkWriter<TestEntityA> writer, string emitKind = "emit") =>
-        new(new TestProjector(emitKind), writer);
-
-    // ---------------------------------------------------------------------------
-    // Tests
-    // ---------------------------------------------------------------------------
+    private static BatchProjectionPipeline<TestBatchEvent, TestEntityA> BuildPipeline(
+        IBulkWriter<TestEntityA> writer, string emitKind = "emit") =>
+        new(new TestProjector(emitKind), writer, NullLogger<BatchProjectionPipeline<TestBatchEvent, TestEntityA>>.Instance);
 
     [Test]
     public async Task SingleEvent_WriterCalledWithOneEntity()
     {
         var writer = Substitute.For<IBulkWriter<TestEntityA>>();
-        var consumer = BuildConsumer(writer);
+        var pipeline = BuildPipeline(writer);
 
-        await consumer.Consume(BuildBatchContext(new TestBatchEvent("emit")));
+        await pipeline.Project(BuildBatchContext(new TestBatchEvent("emit")));
 
         await writer.Received(1).WriteAsync(
             Arg.Is<IEnumerable<TestEntityA>>(e => e.Count() == 1),
@@ -105,9 +85,9 @@ public sealed class ReadModelBatchConsumerBaseTests
     public async Task ThreeEvents_WriterReceivesThreeEntities()
     {
         var writer = Substitute.For<IBulkWriter<TestEntityA>>();
-        var consumer = BuildConsumer(writer);
+        var pipeline = BuildPipeline(writer);
 
-        await consumer.Consume(BuildBatchContext(
+        await pipeline.Project(BuildBatchContext(
             new TestBatchEvent("emit"),
             new TestBatchEvent("emit"),
             new TestBatchEvent("emit")));
@@ -121,9 +101,9 @@ public sealed class ReadModelBatchConsumerBaseTests
     public async Task AllProjectionsEmpty_WriterNotCalled()
     {
         var writer = Substitute.For<IBulkWriter<TestEntityA>>();
-        var consumer = BuildConsumer(writer, emitKind: "emit");
+        var pipeline = BuildPipeline(writer, emitKind: "emit");
 
-        await consumer.Consume(BuildBatchContext(
+        await pipeline.Project(BuildBatchContext(
             new TestBatchEvent("none"), new TestBatchEvent("none")));
 
         await writer.DidNotReceive().WriteAsync(
@@ -135,9 +115,9 @@ public sealed class ReadModelBatchConsumerBaseTests
     public async Task EmptyBatch_WriterNotCalled()
     {
         var writer = Substitute.For<IBulkWriter<TestEntityA>>();
-        var consumer = BuildConsumer(writer);
+        var pipeline = BuildPipeline(writer);
 
-        await consumer.Consume(BuildBatchContext());
+        await pipeline.Project(BuildBatchContext());
 
         await writer.DidNotReceive().WriteAsync(
             Arg.Any<IEnumerable<TestEntityA>>(),
@@ -148,10 +128,10 @@ public sealed class ReadModelBatchConsumerBaseTests
     public async Task MixedBatch_OnlyEmittingEventsCountedInWrite()
     {
         var writer = Substitute.For<IBulkWriter<TestEntityA>>();
-        var consumer = BuildConsumer(writer);
+        var pipeline = BuildPipeline(writer);
 
         // 2 emitting + 1 silent → writer gets 2 entities
-        await consumer.Consume(BuildBatchContext(
+        await pipeline.Project(BuildBatchContext(
             new TestBatchEvent("emit"),
             new TestBatchEvent("none"),
             new TestBatchEvent("emit")));

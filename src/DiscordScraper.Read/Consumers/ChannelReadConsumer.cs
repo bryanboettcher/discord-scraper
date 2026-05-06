@@ -1,16 +1,17 @@
 using DiscordScraper.Contracts.Events.Channel;
 using DiscordScraper.Read.Data.Entities;
-using DiscordScraper.Read.Mapping;
-using Microsoft.Extensions.Logging;
+using MassTransit;
 
 namespace DiscordScraper.Read.Consumers;
 
 /// <summary>
 /// Projects <see cref="ChannelChanged"/> events into <see cref="ReadChannel"/> rows,
-/// one row per event.
+/// one row per event. Delegates to <see cref="BatchProjectionPipeline{TEvent,TEntity}"/>.
 /// </summary>
 public sealed class ChannelReadConsumer(
-    IBatchProjector<ChannelChanged, ReadChannel> projector,
-    IBulkWriter<ReadChannel> writer,
-    ILogger<ChannelReadConsumer> logger)
-    : ReadModelBatchConsumer<ChannelChanged, ReadChannel>(projector, writer, logger);
+    BatchProjectionPipeline<ChannelChanged, ReadChannel> pipeline)
+    : IConsumer<Batch<ChannelChanged>>
+{
+    public Task Consume(ConsumeContext<Batch<ChannelChanged>> context)
+        => pipeline.Project(context);
+}

@@ -83,7 +83,10 @@ public sealed class ChannelReadConsumerTests
         };
 
     private static ChannelReadConsumer BuildConsumer(IBulkWriter<ReadChannel> writer) =>
-        new(new MapperlyChannelChangedProjector(), writer, NullLogger<ChannelReadConsumer>.Instance);
+        new(new BatchProjectionPipeline<ChannelChanged, ReadChannel>(
+            new MapperlyChannelChangedProjector(),
+            writer,
+            NullLogger<BatchProjectionPipeline<ChannelChanged, ReadChannel>>.Instance));
 
     // ---------------------------------------------------------------------------
     // Projector-level tests (pure event-in / entity-out, no consumer overhead)

@@ -87,7 +87,10 @@ public sealed class MessageReadConsumerTests
     public sealed class ReadMessageProjection
     {
         private static ReadMessageProjectionConsumer BuildConsumer(IBulkWriter<ReadMessage> writer) =>
-            new(new MapperlyReadMessageProjector(), writer, NullLogger<ReadMessageProjectionConsumer>.Instance);
+            new(new BatchProjectionPipeline<MessageEnriched, ReadMessage>(
+                new MapperlyReadMessageProjector(),
+                writer,
+                NullLogger<BatchProjectionPipeline<MessageEnriched, ReadMessage>>.Instance));
 
         [Test]
         public void Projector_FieldMapping_ScalarFields()
@@ -226,7 +229,10 @@ public sealed class MessageReadConsumerTests
     public sealed class MessageReferenceProjection
     {
         private static MessageReferenceProjectionConsumer BuildConsumer(IBulkWriter<MessageReference> writer) =>
-            new(new MapperlyMessageReferenceProjector(), writer, NullLogger<MessageReferenceProjectionConsumer>.Instance);
+            new(new BatchProjectionPipeline<MessageEnriched, MessageReference>(
+                new MapperlyMessageReferenceProjector(),
+                writer,
+                NullLogger<BatchProjectionPipeline<MessageEnriched, MessageReference>>.Instance));
 
         [Test]
         public void Projector_MentionAndChannelRef_ProduceReferenceRows_StableOrdinals()
@@ -309,7 +315,10 @@ public sealed class MessageReadConsumerTests
     public sealed class MessageAttachmentProjection
     {
         private static MessageAttachmentProjectionConsumer BuildConsumer(IBulkWriter<MessageAttachment> writer) =>
-            new(new MapperlyMessageAttachmentProjector(), writer, NullLogger<MessageAttachmentProjectionConsumer>.Instance);
+            new(new BatchProjectionPipeline<MessageEnriched, MessageAttachment>(
+                new MapperlyMessageAttachmentProjector(),
+                writer,
+                NullLogger<BatchProjectionPipeline<MessageEnriched, MessageAttachment>>.Instance));
 
         [Test]
         public void Projector_WithAttachment_FieldsMapped()
@@ -378,7 +387,10 @@ public sealed class MessageReadConsumerTests
     public sealed class MessageEmbedProjection
     {
         private static MessageEmbedProjectionConsumer BuildConsumer(IBulkWriter<MessageEmbed> writer) =>
-            new(new MapperlyMessageEmbedProjector(), writer, NullLogger<MessageEmbedProjectionConsumer>.Instance);
+            new(new BatchProjectionPipeline<MessageEnriched, MessageEmbed>(
+                new MapperlyMessageEmbedProjector(),
+                writer,
+                NullLogger<BatchProjectionPipeline<MessageEnriched, MessageEmbed>>.Instance));
 
         [Test]
         public void Projector_WithEmbed_FieldsMapped()
@@ -446,7 +458,10 @@ public sealed class MessageReadConsumerTests
     public sealed class MessageTagProjection
     {
         private static MessageTagProjectionConsumer BuildConsumer(IBulkWriter<MessageTag> writer) =>
-            new(new MapperlyMessageTagProjector(), writer, NullLogger<MessageTagProjectionConsumer>.Instance);
+            new(new BatchProjectionPipeline<MessageEnriched, MessageTag>(
+                new MapperlyMessageTagProjector(),
+                writer,
+                NullLogger<BatchProjectionPipeline<MessageEnriched, MessageTag>>.Instance));
 
         [Test]
         public void Projector_WithTags_ProducesOneTagPerEntry()
