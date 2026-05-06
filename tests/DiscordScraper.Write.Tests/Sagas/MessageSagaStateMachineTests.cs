@@ -1246,10 +1246,11 @@ public sealed class MessageSagaStateMachineTests
         sagaBefore!.EmbeddingModelVersion.ShouldBe(oldModel);
 
         // Publish re-classify request — cutoff after UpdatedOn so this saga matches.
+        // UpdatedOn now derives from ctx.SentTime (real clock), so use a reliably future cutoff.
         await harness.Bus.Publish<ClassificationInvalidated>(new
         {
             ModelVersion = newModel,
-            Cutoff = FixedNow.AddHours(1),
+            Cutoff = FixedIndexedAt.AddHours(1),
         });
 
         // Saga should leave Enriched, enter Classifying (tag skipped), then return to Enriched.
@@ -1432,10 +1433,11 @@ public sealed class MessageSagaStateMachineTests
         var sagaBefore = sagaHarness.Sagas.Contains(expectedId);
         sagaBefore!.EmbeddingModelVersion.ShouldBe(oldEmbeddingModel);
 
+        // UpdatedOn now derives from ctx.SentTime (real clock), so use a reliably future cutoff.
         await harness.Bus.Publish<TagsInvalidated>(new
         {
             ModelVersion = newEmbeddingModel,
-            Cutoff = FixedNow.AddHours(1),
+            Cutoff = FixedIndexedAt.AddHours(1),
         });
 
         // TagsInvalidated re-enters from Tagging (both Tag + Classify re-run).
@@ -1911,11 +1913,12 @@ public sealed class MessageSagaStateMachineTests
 
         // TagsInvalidated predicate: EmbeddingModelVersion != ModelVersion.
         // Drive re-tag by requesting an EmbeddingModelVersion the saga does not currently have.
+        // UpdatedOn now derives from ctx.SentTime (real clock), so use a reliably future cutoff.
         const string newTagModel = "llama3.1:70b";
         await harness.Bus.Publish<TagsInvalidated>(new
         {
             ModelVersion = newTagModel,
-            Cutoff = FixedNow.AddHours(1),
+            Cutoff = FixedIndexedAt.AddHours(1),
         });
 
         var machine = provider.GetRequiredService<MessageSagaStateMachine>();
@@ -2002,10 +2005,11 @@ public sealed class MessageSagaStateMachineTests
             "Initial ClassifyModelVersion must match first ClassifyRequest response");
 
         // Publish ClassificationInvalidated with a new classify model — predicate: ClassifyModelVersion != ModelVersion.
+        // UpdatedOn now derives from ctx.SentTime (real clock), so use a reliably future cutoff.
         await harness.Bus.Publish<ClassificationInvalidated>(new
         {
             ModelVersion = newTagModel,
-            Cutoff = FixedNow.AddHours(1),
+            Cutoff = FixedIndexedAt.AddHours(1),
         });
 
         // Saga must leave Enriched, enter Classifying (Tag skipped), then return to Enriched.

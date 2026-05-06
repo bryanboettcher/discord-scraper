@@ -1,5 +1,9 @@
+// CS8618/CS9264: MT initializes Event/State/Request properties via reflection on backing fields.
+// CS8602/CS8601: dereferencing those properties in the constructor (e.g. State[] allStates,
+// catch-all During loops) is safe at runtime but unprovable by flow analysis.
+#pragma warning disable CS8618, CS9264, CS8602, CS8601
+
 using DiscordScraper.Contracts;
-using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Contracts.Events.Channel;
 using MassTransit;
 
@@ -21,7 +25,7 @@ public sealed class ChannelSagaStateMachine : MassTransitStateMachine<ChannelSag
     // Pin poll cadence. Lift to options if a deployment needs a different value.
     private static readonly TimeSpan PinPollDelay = TimeSpan.FromMinutes(5);
 
-    public ChannelSagaStateMachine(ISystemClock clock)
+    public ChannelSagaStateMachine()
     {
         InstanceState(x => x.CurrentState);
 
@@ -95,14 +99,7 @@ public sealed class ChannelSagaStateMachine : MassTransitStateMachine<ChannelSag
                 {
                     ctx.Saga.PinSetCanonical = ctx.Message.CanonicalHash;
                 })
-                .Schedule(PinPollSchedule, ctx => ctx.Init<PinPollDue>(new
-                {
-                    ctx.Saga.ChannelId,
-                    ctx.Saga.GuildId,
-                    CurrentState = ctx.Saga.CurrentState,
-                    DueAt = clock.UtcNow.Add(PinPollDelay),
-                    UpdatedOn = ctx.Saga.UpdatedOn,
-                })));
+                .Schedule(PinPollSchedule, ctx => ctx.ToPinPollDue(PinPollDelay)));
 
         During(Syncing,
             // A second ChannelSyncDue arriving while already syncing (e.g. scheduler fires
@@ -134,27 +131,20 @@ public sealed class ChannelSagaStateMachine : MassTransitStateMachine<ChannelSag
 
                     ctx.Saga.IsCaughtUpAtLastPoll = ctx.Message.IsCaughtUpAtLastPoll;
                     ctx.Saga.LastSyncMessageCount = ctx.Message.MessageCount;
-                    ctx.Saga.LastSyncedAt = clock.UtcNow;
+                    ctx.Saga.LastSyncedAt = ctx.SentTime ?? ctx.Saga.UpdatedOn;
                 })
-                .Then(ctx => SettleSaga(ctx, clock))
-                .Schedule(PinPollSchedule, ctx => ctx.Init<PinPollDue>(new
-                {
-                    ctx.Saga.ChannelId,
-                    ctx.Saga.GuildId,
-                    CurrentState = ctx.Saga.CurrentState,
-                    DueAt = clock.UtcNow.Add(PinPollDelay),
-                    UpdatedOn = ctx.Saga.UpdatedOn,
-                }))
+                .Then(SettleSaga)
+                .Schedule(PinPollSchedule, ctx => ctx.ToPinPollDue(PinPollDelay))
                 .TransitionTo(CaughtUp));
 
         // Catch-all: every event bumps UpdatedOn and initialises CreatedOn once.
         During(
             Initial, Syncing, CaughtUp,
-            When(SyncDue).Then(ctx => UpdateSaga(ctx, clock)),
-            When(SyncCompleted).Then(ctx => UpdateSaga(ctx, clock)),
-            When(Changed).Then(ctx => UpdateSaga(ctx, clock)),
-            When(PinSetChanged).Then(ctx => UpdateSaga(ctx, clock)),
-            When(PinPollSchedule.Received).Then(ctx => UpdateSaga(ctx, clock)));
+            When(SyncDue).Then(UpdateSaga),
+            When(SyncCompleted).Then(UpdateSaga),
+            When(Changed).Then(UpdateSaga),
+            When(PinSetChanged).Then(UpdateSaga),
+            When(PinPollSchedule.Received).Then(UpdateSaga));
     }
 
     private static void ApplyChannelChanged(ChannelSagaState saga, ChannelChanged msg)
@@ -164,24 +154,23 @@ public sealed class ChannelSagaStateMachine : MassTransitStateMachine<ChannelSag
             saga.IsPresent = false;
     }
 
-    private static void UpdateSaga(BehaviorContext<ChannelSagaState> ctx, ISystemClock clock)
+    private static void UpdateSaga(BehaviorContext<ChannelSagaState> ctx)
     {
-        var now = clock.UtcNow;
+        var now = ctx.SentTime ?? ctx.Saga.UpdatedOn;
         if (ctx.Saga.CreatedOn == default) ctx.Saga.CreatedOn = now;
         ctx.Saga.UpdatedOn = now;
     }
 
-    private static void SettleSaga(BehaviorContext<ChannelSagaState> ctx, ISystemClock clock)
-        => ctx.Saga.SettledOn = clock.UtcNow;
+    private static void SettleSaga(BehaviorContext<ChannelSagaState> ctx)
+        => ctx.Saga.SettledOn = ctx.SentTime ?? ctx.Saga.UpdatedOn;
 
-    // ReSharper disable UnassignedGetOnlyAutoProperty
-    public State Syncing { get; private set; } = null!;
-    public State CaughtUp { get; private set; } = null!;
+    public State Syncing { get; }
+    public State CaughtUp { get; }
 
-    public Event<ChannelSyncDue> SyncDue { get; private set; } = null!;
-    public Event<ChannelSyncCompleted> SyncCompleted { get; private set; } = null!;
-    public Event<ChannelChanged> Changed { get; private set; } = null!;
-    public Event<PinSetChanged> PinSetChanged { get; private set; } = null!;
+    public Event<ChannelSyncDue> SyncDue { get; }
+    public Event<ChannelSyncCompleted> SyncCompleted { get; }
+    public Event<ChannelChanged> Changed { get; }
+    public Event<PinSetChanged> PinSetChanged { get; }
 
-    public Schedule<ChannelSagaState, PinPollDue> PinPollSchedule { get; private set; } = null!;
+    public Schedule<ChannelSagaState, PinPollDue> PinPollSchedule { get; }
 }
