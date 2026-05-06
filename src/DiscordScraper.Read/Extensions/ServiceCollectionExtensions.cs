@@ -65,6 +65,11 @@ public static class ReadServiceCollectionExtensions
         // Open-generic IBulkWriter<TEntity> — resolves EfCoreBulkWriter<T> for any read entity.
         services.AddScoped(typeof(IBulkWriter<>), typeof(EfCoreBulkWriter<>));
 
+        // read_messages is a TimescaleDB hypertable with no physical PK on message_id alone;
+        // BulkInsertOrUpdateAsync would generate ON CONFLICT (message_id) which Postgres rejects.
+        // ReadMessageBulkWriter uses BulkInsertAsync instead; this registration overrides the open-generic above.
+        services.AddScoped<IBulkWriter<ReadMessage>, ReadMessageBulkWriter>();
+
         // Open-generic BatchProjectionPipeline<TEvent,TEntity> — DI closes per request,
         // injected into each thin concrete read-side consumer.
         services.AddScoped(typeof(BatchProjectionPipeline<,>));
