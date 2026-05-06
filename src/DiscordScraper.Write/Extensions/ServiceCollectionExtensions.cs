@@ -1,4 +1,5 @@
 using DiscordScraper.Contracts.Configuration;
+using DiscordScraper.Write.Consumers;
 using DiscordScraper.Write.Parsing;
 using DiscordScraper.Write.Repositories;
 using DiscordScraper.Write.Sagas;
@@ -9,6 +10,19 @@ namespace DiscordScraper.Write.Extensions;
 
 public static class ServiceCollectionExtensions
 {
+    /// <summary>
+    /// Registers <see cref="CaptureOptions"/> and the <see cref="CaptureWriter"/> singleton.
+    /// Call from the host before AddMassTransit so the options and writer are available when
+    /// MessageCaptureConsumer is resolved from the consumer scope.
+    /// </summary>
+    public static IServiceCollection AddCaptureOptions(this IServiceCollection services)
+    {
+        services.AddOptions<CaptureOptions>()
+            .BindConfiguration(CaptureOptions.SectionName);
+        services.AddSingleton<CaptureWriter>();
+        return services;
+    }
+
     public static IServiceCollection AddSyncScheduler(this IServiceCollection services)
     {
         services.AddHostedService<SyncSchedulerService>();

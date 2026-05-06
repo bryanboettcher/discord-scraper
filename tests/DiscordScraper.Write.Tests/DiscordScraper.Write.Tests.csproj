@@ -25,6 +25,7 @@
     <ProjectReference Include="..\..\src\DiscordScraper.Contracts\DiscordScraper.Contracts.csproj" />
     <ProjectReference Include="..\..\src\DiscordScraper.Write\DiscordScraper.Write.csproj" />
     <ProjectReference Include="..\..\src\DiscordScraper.Discord\DiscordScraper.Discord.csproj" />
+    <ProjectReference Include="..\DiscordScraper.TestSupport\DiscordScraper.TestSupport.csproj" />
   </ItemGroup>
 
 </Project>
