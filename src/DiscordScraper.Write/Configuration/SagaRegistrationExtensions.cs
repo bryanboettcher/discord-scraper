@@ -48,7 +48,8 @@ public static class SagaRegistrationExtensions
             });
 
         // Consumer definitions co-located in this assembly are auto-discovered.
-        cfg.AddConsumers(typeof(WriteAssemblyMarker).Assembly);
+        // Filter abstract types so abstract bases aren't registered as consumers.
+        cfg.AddConsumers(t => !t.IsAbstract, typeof(WriteAssemblyMarker).Assembly);
 
         return cfg;
     }

@@ -78,8 +78,12 @@ builder.Services.AddReadVectorStore();
 builder.Services.AddMassTransit(x =>
 {
     x.AddWriteSagasAndConsumers();
-    x.AddConsumers(typeof(EnrichmentAssemblyMarker).Assembly);
-    x.AddConsumers(typeof(ReadAssemblyMarker).Assembly);
+    // Filter out abstract types — assembly scan otherwise registers abstract bases
+    // (e.g. ReadModelBatchConsumer<TEvent,TEntity>) as consumers, which MT then tries
+    // to instantiate per batch, faulting every delivery with "Instances of abstract
+    // classes cannot be created."
+    x.AddConsumers(t => !t.IsAbstract, typeof(EnrichmentAssemblyMarker).Assembly);
+    x.AddConsumers(t => !t.IsAbstract, typeof(ReadAssemblyMarker).Assembly);
 
     // Outbox requires Mongo running as a single-node replica set (docker-compose configures rs0).
     x.AddMongoDbOutbox(o =>
