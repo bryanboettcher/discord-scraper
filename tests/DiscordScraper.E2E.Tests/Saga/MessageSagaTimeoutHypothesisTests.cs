@@ -18,28 +18,30 @@ namespace DiscordScraper.E2E.Tests.Saga;
 /// that AnalyzeMessageConsumer marks non-substantive; the remaining 9 run through the full
 /// Analyze → Project → Tag → Classify chain.
 ///
-/// Gap measurement model (post-Task E):
-///   <see cref="Filters.TimestampFilter{T}"/> stamps a publish-time timestamp into every
-///   <see cref="IStampable"/> message body. <see cref="ResponseConsumeObserver{TResponse}"/>
-///   reads <c>context.Message.Timestamp</c> at PreConsume to derive the publish→consume gap.
-///   No send-side observer is required. This works on all transports including InMemory.
+/// Gap measurement model:
+///   <see cref="Filters.OutboundTimestampFilter{T}"/> stamps a publish-time timestamp and
+///   <see cref="Filters.InboundTimestampFilter{T}"/> stamps a receive-time timestamp into every
+///   <see cref="IMeasured"/> message body. <see cref="ResponseConsumeObserver{TResponse}"/>
+///   reads both fields in PostConsume (after the consume filter has run) to derive the
+///   publish→consume gap. No send-side observer is required. Works on all transports.
 ///
-/// Open question Q1 (saga Request() sends — resolved):
+/// Q1 (saga Request() sends — resolved):
 ///   Under InMemory transport, <c>ISendObserver</c> does NOT fire for saga-initiated
 ///   <c>Request()</c> sends. The fix: stamp timestamps into message bodies via
-///   <see cref="Filters.TimestampFilter{T}"/> so the consume side can compute the gap
-///   directly from <c>context.Message.Timestamp</c>. Gaps in <see cref="ITestObservationSink.Consumes"/>
-///   are now populated for all tiers when messages implement <see cref="IStampable"/>.
+///   <see cref="Filters.OutboundTimestampFilter{T}"/> so the consume side can compute the gap
+///   directly from <c>context.Message.Timestamp</c> + <c>ReceivedOn</c>. Gaps in
+///   <see cref="ITestObservationSink.Consumes"/> are populated for all tiers when messages
+///   implement <see cref="IMeasured"/>.
 ///
 /// Open question Q2 (saga-endpoint IConsumeMessageObserver wiring):
 ///   ConnectResponseObserver&lt;TResponse&gt; via IBus.ConnectConsumeMessageObserver fires correctly
 ///   at all endpoints for the specified response type. Verified unchanged.
 ///
-/// Open question Q3 (SentTime nullability per transport):
-///   InMemory transport: ConsumeContext.SentTime is null. The QueueDwellObserver now prefers
-///   <c>IStampable.Timestamp</c> over <c>SentTime</c>. For non-IStampable messages on InMemory,
-///   EnqueuedAt = DateTimeOffset.MinValue (sentinel). Filter QueueDwells by
-///   EnqueuedAt != DateTimeOffset.MinValue to exclude sentinel records from dwell analysis.
+/// Q3 (SentTime nullability per transport):
+///   InMemory transport: ConsumeContext.SentTime is null. QueueDwellObserver prefers
+///   <c>IMeasured.Timestamp</c>/<c>ReceivedOn</c> over <c>SentTime</c>. For non-IMeasured
+///   messages on InMemory, EnqueuedAt = DateTimeOffset.MinValue (sentinel). Filter QueueDwells
+///   by EnqueuedAt != DateTimeOffset.MinValue to exclude sentinels from dwell analysis.
 ///
 /// Docker requirement: Testcontainers needs Docker. Tests are tagged [Category("Integration")].
 /// </summary>
