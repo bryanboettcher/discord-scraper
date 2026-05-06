@@ -19,10 +19,6 @@ public static class ReadConsumerEndpointExtensions
         IReadBatchOptions options)
         where TConsumer : class, IConsumer
     {
-        // In-memory inbox avoids a Postgres round-trip on rapid same-message redelivery within
-        // a single process lifetime. Outbox half is harmless because these consumers publish nothing.
-        endpointConfigurator.UseInMemoryInboxOutbox(context);
-
         // PrefetchCount defaults to MessageLimit × ConcurrencyLimit, handled automatically
         // by BatchOptions.DefaultConfigurationCallback.
         consumerConfigurator.Options<BatchOptions>(opts => opts

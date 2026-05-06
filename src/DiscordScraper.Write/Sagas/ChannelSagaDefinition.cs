@@ -1,18 +1,20 @@
+using DiscordScraper.Contracts;
+using DiscordScraper.Contracts.Events.Channel;
 using MassTransit;
+using MassTransit.Middleware;
 
 namespace DiscordScraper.Write.Sagas;
 
 /// <summary>
-/// ChannelSyncDue uses InsertOnInitial=true. During the initial guild backfill,
-/// GuildSyncConsumer fans out ChannelSyncDue for every channel simultaneously; if the
-/// scheduler fires a second request before the first insert commits, Mongo raises a DuplicateKey
-/// conflict. Exponential backoff clears the collision window before faulting.
+/// Partitioning serialises events for the same ChannelId on a single partition lock,
+/// preventing same-saga InsertOnInitial races and Mongo WriteConflict on concurrent
+/// FindOneAndReplace. See wiki ADR-001 (saga endpoint partitioning) for rationale.
 /// </summary>
 public sealed class ChannelSagaDefinition : SagaDefinition<ChannelSagaState>
 {
     public ChannelSagaDefinition()
     {
-        ConcurrentMessageLimit = 8;
+        ConcurrentMessageLimit = 16;
     }
 
     protected override void ConfigureSaga(
@@ -20,12 +22,23 @@ public sealed class ChannelSagaDefinition : SagaDefinition<ChannelSagaState>
         ISagaConfigurator<ChannelSagaState> sagaConfigurator,
         IRegistrationContext context)
     {
-        // Same exponential shape as MessageSagaDefinition — mirrors MT's JobSagaDefinition.
+        // Single shared Partitioner instance — all UsePartitioner calls below use the same
+        // lock pool so events for the same ChannelId hash to the same partition slot
+        // regardless of message type.
+        var partition = new Partitioner(16, new Murmur3UnsafeHashGenerator());
+
+        endpointConfigurator.UsePartitioner<ChannelSyncDue>(partition, m => DeterministicGuid.FromSnowflake(m.Message.ChannelId));
+        endpointConfigurator.UsePartitioner<ChannelSyncCompleted>(partition, m => DeterministicGuid.FromSnowflake(m.Message.ChannelId));
+        endpointConfigurator.UsePartitioner<ChannelChanged>(partition, m => DeterministicGuid.FromSnowflake(m.Message.ChannelId));
+        endpointConfigurator.UsePartitioner<PinSetChanged>(partition, m => DeterministicGuid.FromSnowflake(m.Message.ChannelId));
+        endpointConfigurator.UsePartitioner<PinPollDue>(partition, m => DeterministicGuid.FromSnowflake(m.Message.ChannelId));
+
+        // Retry as rare-event safety net — partitioning prevents the bulk of contention.
         endpointConfigurator.UseMessageRetry(r =>
-            r.Exponential(8,
-                TimeSpan.FromMilliseconds(100),
-                TimeSpan.FromSeconds(2),
-                TimeSpan.FromMilliseconds(100)));
+            r.Exponential(3,
+                TimeSpan.FromMilliseconds(50),
+                TimeSpan.FromMilliseconds(500),
+                TimeSpan.FromMilliseconds(50)));
 
         endpointConfigurator.UseMongoDbOutbox(context);
     }
