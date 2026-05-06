@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <PackageReference Include="Bogus" />
+    <PackageReference Include="MassTransit" />
+    <PackageReference Include="MassTransit.TestFramework" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
+    <PackageReference Include="NSubstitute" />
+    <PackageReference Include="NUnit" />
+    <PackageReference Include="Shouldly" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="NUnit.Framework" />
+    <Using Include="Shouldly" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\DiscordScraper.Api\DiscordScraper.Api.csproj" />
+    <ProjectReference Include="..\..\src\DiscordScraper.Contracts\DiscordScraper.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\DiscordScraper.Core\DiscordScraper.Core.csproj" />
+    <ProjectReference Include="..\..\src\DiscordScraper.Discord\DiscordScraper.Discord.csproj" />
+    <ProjectReference Include="..\..\src\DiscordScraper.Enrichment\DiscordScraper.Enrichment.csproj" />
+    <ProjectReference Include="..\..\src\DiscordScraper.Ingester\DiscordScraper.Ingester.csproj" />
+    <ProjectReference Include="..\..\src\DiscordScraper.Read\DiscordScraper.Read.csproj" />
+    <ProjectReference Include="..\..\src\DiscordScraper.Rendering\DiscordScraper.Rendering.csproj" />
+    <ProjectReference Include="..\..\src\DiscordScraper.Write\DiscordScraper.Write.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Fixtures/*.jsonl" />
+  </ItemGroup>
+
+</Project>
