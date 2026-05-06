@@ -19,11 +19,14 @@
   <ItemGroup>
     <Using Include="NUnit.Framework" />
     <Using Include="Shouldly" />
+    <Using Include="System.Linq" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\DiscordScraper.Contracts\DiscordScraper.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\DiscordScraper.Core\DiscordScraper.Core.csproj" />
     <ProjectReference Include="..\..\src\DiscordScraper.Enrichment\DiscordScraper.Enrichment.csproj" />
+    <ProjectReference Include="..\DiscordScraper.TestSupport\DiscordScraper.TestSupport.csproj" />
   </ItemGroup>
 
 </Project>

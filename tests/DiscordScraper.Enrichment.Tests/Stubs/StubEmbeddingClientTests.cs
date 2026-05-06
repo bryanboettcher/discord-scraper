@@ -1,0 +1,144 @@
+using DiscordScraper.TestSupport.Stubs;
+
+namespace DiscordScraper.Enrichment.Tests.Stubs;
+
+[TestFixture]
+public class StubEmbeddingClientTests
+{
+    [Test]
+    public void Constructor_Default_UsesDefaultProfiles()
+    {
+        var stub = new StubEmbeddingClient();
+        Assert.That(stub.Model, Is.EqualTo("stub-embed"));
+    }
+
+    [Test]
+    public async Task EmbedAsync_WithDefaultProfiles_ReturnsEmbedding()
+    {
+        var stub = new StubEmbeddingClient();
+        var result = await stub.EmbedAsync("test text");
+
+        Assert.That(result.Length, Is.EqualTo(768));
+        var result2 = await stub.EmbedAsync("test text");
+        Assert.That(result.Span.SequenceEqual(result2.Span), Is.True);
+    }
+
+    [Test]
+    public async Task EmbedAsync_WithConstantLatency_DelaysCorrectly()
+    {
+        var latency = new LatencyProfile<string>.Constant(TimeSpan.FromMilliseconds(100));
+        var stub = new StubEmbeddingClient(
+            latency,
+            new FailureProfile<string>.None(),
+            OutputGeneratorHelpers.DeterministicEmbedding());
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        await stub.EmbedAsync("test");
+        sw.Stop();
+
+        Assert.That(sw.ElapsedMilliseconds, Is.GreaterThanOrEqualTo(100));
+    }
+
+    [Test]
+    public async Task EmbedAsync_WithFailureProfile_ThrowsOnFailure()
+    {
+        var failure = new FailureProfile<string>.EveryNth(1, () => new InvalidOperationException("Injected failure"));
+        var stub = new StubEmbeddingClient(
+            new LatencyProfile<string>.Constant(TimeSpan.Zero),
+            failure,
+            OutputGeneratorHelpers.DeterministicEmbedding());
+
+        Assert.ThrowsAsync<InvalidOperationException>(async () => await stub.EmbedAsync("test"));
+    }
+
+    [Test]
+    public async Task EmbedAsync_FailureBeforeLatency_FailsImmediately()
+    {
+        var failure = new FailureProfile<string>.EveryNth(1, () => new InvalidOperationException("Injected failure"));
+        var latency = new LatencyProfile<string>.Constant(TimeSpan.FromMilliseconds(500));
+        var stub = new StubEmbeddingClient(latency, failure, OutputGeneratorHelpers.DeterministicEmbedding());
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        Assert.ThrowsAsync<InvalidOperationException>(async () => await stub.EmbedAsync("test"));
+        sw.Stop();
+
+        Assert.That(sw.ElapsedMilliseconds, Is.LessThan(200));
+    }
+
+    [Test]
+    public async Task EmbedAsync_WithBurstFailure_FailsAtCorrectCall()
+    {
+        var failure = new FailureProfile<string>.Burst(1, 2, () => new InvalidOperationException("Burst failure"));
+        var stub = new StubEmbeddingClient(
+            new LatencyProfile<string>.Constant(TimeSpan.Zero),
+            failure,
+            OutputGeneratorHelpers.DeterministicEmbedding());
+
+        var result1 = await stub.EmbedAsync("test1");
+        Assert.That(result1.Length, Is.EqualTo(768));
+
+        Assert.ThrowsAsync<InvalidOperationException>(async () => await stub.EmbedAsync("test2"));
+        Assert.ThrowsAsync<InvalidOperationException>(async () => await stub.EmbedAsync("test3"));
+
+        var result4 = await stub.EmbedAsync("test4");
+        Assert.That(result4.Length, Is.EqualTo(768));
+    }
+
+    [Test]
+    public async Task EmbedAsync_WithFromInputLatency_VariesByInput()
+    {
+        var latency = new LatencyProfile<string>.FromInput(input =>
+            input.Length > 5 ? TimeSpan.FromMilliseconds(50) : TimeSpan.Zero);
+
+        var stub = new StubEmbeddingClient(latency, new FailureProfile<string>.None(),
+            OutputGeneratorHelpers.DeterministicEmbedding());
+
+        var sw1 = System.Diagnostics.Stopwatch.StartNew();
+        await stub.EmbedAsync("short");
+        sw1.Stop();
+
+        var sw2 = System.Diagnostics.Stopwatch.StartNew();
+        await stub.EmbedAsync("verylongstring");
+        sw2.Stop();
+
+        Assert.That(sw1.ElapsedMilliseconds, Is.LessThan(30));
+        Assert.That(sw2.ElapsedMilliseconds, Is.GreaterThan(30), "Latency should be noticeably greater for long input");
+    }
+
+    [Test]
+    public async Task EmbedAsync_CallIndexIncrementsPerCall()
+    {
+        var indices = new List<int>();
+        var failure = new FailureProfile<string>.FromInput((_, idx) =>
+        {
+            indices.Add(idx);
+            return null;
+        });
+
+        var stub = new StubEmbeddingClient(
+            new LatencyProfile<string>.Constant(TimeSpan.Zero),
+            failure,
+            OutputGeneratorHelpers.DeterministicEmbedding());
+
+        await stub.EmbedAsync("test1");
+        await stub.EmbedAsync("test2");
+        await stub.EmbedAsync("test3");
+
+        Assert.That(indices, Is.EqualTo(new[] { 1, 2, 3 }));
+    }
+
+    [Test]
+    public async Task EmbedAsync_DeterministicOutputAcrossMultipleCalls()
+    {
+        var stub = new StubEmbeddingClient();
+
+        var outputs = new List<ReadOnlyMemory<float>>();
+        for (int i = 0; i < 3; i++)
+        {
+            outputs.Add(await stub.EmbedAsync("same-input"));
+        }
+
+        Assert.That(outputs[0].Span.SequenceEqual(outputs[1].Span), Is.True);
+        Assert.That(outputs[1].Span.SequenceEqual(outputs[2].Span), Is.True);
+    }
+}
