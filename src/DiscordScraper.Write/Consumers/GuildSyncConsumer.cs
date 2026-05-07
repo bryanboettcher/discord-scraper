@@ -53,6 +53,7 @@ public sealed class GuildSyncConsumer(
                 IsPresent = false,
                 CurrentState = "Inaccessible",
                 UpdatedOn = clock.UtcNow,
+                SyncedAt = (DateTimeOffset?)clock.UtcNow,
             }, ct);
         }
     }
@@ -120,6 +121,7 @@ public sealed class GuildSyncConsumer(
             IsPresent = true,
             CurrentState = "Synced",
             UpdatedOn = now,
+            SyncedAt = (DateTimeOffset?)now,
         }, ct);
     }
 

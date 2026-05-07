@@ -17,4 +17,12 @@ public interface GuildChanged : BaseGuildEvent
     /// or the guild was deleted. Defaults to true so existing publishers don't need to set it.
     /// </summary>
     bool IsPresent { get; }
+
+    /// <summary>
+    /// Clock time at which the publisher fetched this guild snapshot. Carried explicitly so the
+    /// saga can stamp <c>LastSyncedAt</c> from a fixture-controlled value in tests rather than
+    /// relying on <c>ctx.SentTime</c> (which reflects harness wall-clock time).
+    /// Null-safe: read-side consumers ignore it; saga falls back to <c>ctx.SentTime</c>.
+    /// </summary>
+    DateTimeOffset? SyncedAt { get; }
 }

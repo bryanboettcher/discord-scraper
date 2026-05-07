@@ -20,13 +20,6 @@ public class GuildSagaStateMachineTests
 {
     private static readonly DateTimeOffset FixedNow = new(2026, 1, 15, 12, 0, 0, TimeSpan.Zero);
 
-    private static ISystemClock MakeClock()
-    {
-        var clock = Substitute.For<ISystemClock>();
-        clock.UtcNow.Returns(FixedNow);
-        return clock;
-    }
-
     // -------------------------------------------------------------------------
     // Test 1: GuildSyncDue creates saga in Syncing state
     // -------------------------------------------------------------------------
@@ -34,9 +27,7 @@ public class GuildSagaStateMachineTests
     [Test]
     public async Task GuildSyncDue_creates_saga_in_Syncing_state()
     {
-        var clock = MakeClock();
         await using var provider = new ServiceCollection()
-            .AddSingleton(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<GuildSagaStateMachine, GuildSagaState>()
@@ -66,7 +57,8 @@ public class GuildSagaStateMachineTests
         saga.ShouldNotBeNull();
         saga.GuildId.ShouldBe(guildId);
         saga.CorrelationId.ShouldBe(expectedCorrelationId);
-        saga.UpdatedOn.ShouldBe(FixedNow);
+        // UpdatedOn is set from ctx.SentTime (harness wall-clock), not FixedNow.
+        saga.UpdatedOn.ShouldNotBe(default);
     }
 
     // -------------------------------------------------------------------------
@@ -76,9 +68,7 @@ public class GuildSagaStateMachineTests
     [Test]
     public async Task GuildChanged_transitions_to_Synced_and_updates_metadata()
     {
-        var clock = MakeClock();
         await using var provider = new ServiceCollection()
-            .AddSingleton(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<GuildSagaStateMachine, GuildSagaState>()
@@ -111,6 +101,7 @@ public class GuildSagaStateMachineTests
             IsPresent = true,
             CurrentState = "Synced",
             UpdatedOn = FixedNow,
+            SyncedAt = (DateTimeOffset?)FixedNow,
         });
 
         var sagaId = await sagaHarness.Exists(expectedCorrelationId, m => m.Synced);
@@ -120,7 +111,8 @@ public class GuildSagaStateMachineTests
         saga.ShouldNotBeNull();
         saga.Name.ShouldBe("My Test Guild");
         saga.LastSyncedAt.ShouldBe(FixedNow);
-        saga.UpdatedOn.ShouldBe(FixedNow);
+        // UpdatedOn is still set from ctx.SentTime (harness wall-clock), not FixedNow.
+        saga.UpdatedOn.ShouldNotBe(default);
     }
 
     // -------------------------------------------------------------------------
@@ -130,9 +122,7 @@ public class GuildSagaStateMachineTests
     [Test]
     public async Task GuildSyncDue_while_Synced_re_enters_Syncing()
     {
-        var clock = MakeClock();
         await using var provider = new ServiceCollection()
-            .AddSingleton(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<GuildSagaStateMachine, GuildSagaState>()
@@ -185,9 +175,7 @@ public class GuildSagaStateMachineTests
     [Test]
     public async Task GuildChanged_with_roles_populates_saga_roles()
     {
-        var clock = MakeClock();
         await using var provider = new ServiceCollection()
-            .AddSingleton(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<GuildSagaStateMachine, GuildSagaState>()
@@ -238,9 +226,7 @@ public class GuildSagaStateMachineTests
     [Test]
     public async Task GuildChanged_second_publish_replaces_roles_not_merges()
     {
-        var clock = MakeClock();
         await using var provider = new ServiceCollection()
-            .AddSingleton(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<GuildSagaStateMachine, GuildSagaState>()
@@ -383,9 +369,7 @@ public class GuildSagaStateMachineTests
     [Test]
     public async Task Heartbeat_stale_saga_Synced_transitions_to_Syncing()
     {
-        var clock = MakeClock();
         await using var provider = new ServiceCollection()
-            .AddSingleton(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<GuildSagaStateMachine, GuildSagaState>()
@@ -410,15 +394,16 @@ public class GuildSagaStateMachineTests
         await harness.Bus.Publish<GuildChanged>(new
         {
             GuildId = guildId, Name = "Heartbeat Guild", IsPresent = true, CurrentState = "Synced", UpdatedOn = FixedNow,
+            SyncedAt = (DateTimeOffset?)FixedNow,
         });
         await sagaHarness.Exists(correlationId, m => m.Synced);
 
-        // Heartbeat: StaleAfter is after LastSyncedAt (FixedNow) — saga should match and re-enter Syncing.
+        // Heartbeat: StaleAfter is after FixedNow so LastSyncedAt (= FixedNow) falls before the cutoff.
         var heartbeatTime = FixedNow.AddMinutes(10);
         await harness.Bus.Publish<SyncHeartbeat>(new
         {
             Timestamp = heartbeatTime,
-            StaleAfter = heartbeatTime.AddMinutes(-5), // StaleAfter > FixedNow (LastSyncedAt)
+            StaleAfter = FixedNow.AddMinutes(5), // StaleAfter > LastSyncedAt (FixedNow)
         });
 
         var sagaId = await sagaHarness.Exists(correlationId, m => m.Syncing);
@@ -428,9 +413,7 @@ public class GuildSagaStateMachineTests
     [Test]
     public async Task Heartbeat_fresh_saga_stays_Synced()
     {
-        var clock = MakeClock();
         await using var provider = new ServiceCollection()
-            .AddSingleton(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<GuildSagaStateMachine, GuildSagaState>()
@@ -455,15 +438,15 @@ public class GuildSagaStateMachineTests
         await harness.Bus.Publish<GuildChanged>(new
         {
             GuildId = guildId, Name = "Fresh Guild", IsPresent = true, CurrentState = "Synced", UpdatedOn = FixedNow,
+            SyncedAt = (DateTimeOffset?)FixedNow,
         });
         await sagaHarness.Exists(correlationId, m => m.Synced);
 
-        // Heartbeat: StaleAfter is before LastSyncedAt — saga is fresh and must NOT match.
-        var heartbeatTime = FixedNow.AddMinutes(10);
+        // Heartbeat: StaleAfter is before LastSyncedAt (= FixedNow) — saga is fresh, no re-sync.
         await harness.Bus.Publish<SyncHeartbeat>(new
         {
-            Timestamp = heartbeatTime,
-            StaleAfter = FixedNow.AddMinutes(-5), // StaleAfter < FixedNow (LastSyncedAt)
+            Timestamp = FixedNow,
+            StaleAfter = FixedNow.AddMinutes(-60), // StaleAfter < LastSyncedAt (FixedNow)
         });
 
         // Give the harness a moment to process — no state change expected.
@@ -477,9 +460,7 @@ public class GuildSagaStateMachineTests
     [Test]
     public async Task Heartbeat_while_Syncing_is_ignored()
     {
-        var clock = MakeClock();
         await using var provider = new ServiceCollection()
-            .AddSingleton(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<GuildSagaStateMachine, GuildSagaState>()
@@ -520,9 +501,7 @@ public class GuildSagaStateMachineTests
     [Test]
     public async Task Heartbeat_IsPresent_false_is_not_matched()
     {
-        var clock = MakeClock();
         await using var provider = new ServiceCollection()
-            .AddSingleton(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<GuildSagaStateMachine, GuildSagaState>()
@@ -547,6 +526,7 @@ public class GuildSagaStateMachineTests
         await harness.Bus.Publish<GuildChanged>(new
         {
             GuildId = guildId, Name = "Absent Guild", IsPresent = true, CurrentState = "Synced", UpdatedOn = FixedNow,
+            SyncedAt = (DateTimeOffset?)FixedNow,
         });
         await sagaHarness.Exists(correlationId, m => m.Synced);
 
@@ -555,12 +535,11 @@ public class GuildSagaStateMachineTests
         saga.ShouldNotBeNull();
         saga.IsPresent = false;
 
-        // Heartbeat would normally match (stale cutoff after LastSyncedAt) but IsPresent blocks it.
-        var heartbeatTime = FixedNow.AddMinutes(10);
+        // Heartbeat would normally match (StaleAfter > LastSyncedAt = FixedNow) but IsPresent=false blocks it.
         await harness.Bus.Publish<SyncHeartbeat>(new
         {
-            Timestamp = heartbeatTime,
-            StaleAfter = heartbeatTime.AddMinutes(-5),
+            Timestamp = FixedNow.AddMinutes(10),
+            StaleAfter = FixedNow.AddMinutes(5), // StaleAfter > LastSyncedAt (FixedNow)
         });
 
         await Task.Delay(200);
@@ -577,9 +556,7 @@ public class GuildSagaStateMachineTests
     [Test]
     public async Task GuildChanged_IsPresentFalse_WhileSyncing_SetsSagaIsPresentFalse()
     {
-        var clock = MakeClock();
         await using var provider = new ServiceCollection()
-            .AddSingleton(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<GuildSagaStateMachine, GuildSagaState>()
@@ -622,9 +599,7 @@ public class GuildSagaStateMachineTests
     [Test]
     public async Task New_saga_IsPresent_defaults_to_true()
     {
-        var clock = MakeClock();
         await using var provider = new ServiceCollection()
-            .AddSingleton(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<GuildSagaStateMachine, GuildSagaState>()

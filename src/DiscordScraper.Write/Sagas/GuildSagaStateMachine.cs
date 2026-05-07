@@ -1,5 +1,9 @@
+// CS8618/CS9264: MT initializes Event/State properties via reflection on backing fields.
+// CS8602/CS8601: dereferencing those properties in the constructor is safe at runtime
+// but unprovable by flow analysis.
+#pragma warning disable CS8618, CS9264, CS8602, CS8601
+
 using DiscordScraper.Contracts;
-using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Contracts.Events.Guild;
 using DiscordScraper.Contracts.Events.Sync;
 using MassTransit;
@@ -14,7 +18,7 @@ namespace DiscordScraper.Write.Sagas;
 /// </summary>
 public sealed class GuildSagaStateMachine : MassTransitStateMachine<GuildSagaState>
 {
-    public GuildSagaStateMachine(ISystemClock clock)
+    public GuildSagaStateMachine()
     {
         InstanceState(x => x.CurrentState);
 
@@ -72,49 +76,48 @@ public sealed class GuildSagaStateMachine : MassTransitStateMachine<GuildSagaSta
                 .TransitionTo(Syncing),
 
             // GuildChanged received while already Synced (e.g., gateway push) — update in place.
-            When(Changed).Then(ctx => ApplyChanged(ctx.Saga, ctx.Message, clock)));
+            When(Changed).Then(ApplyChanged));
 
         // GuildChanged received during Syncing settles the saga.
         During(Syncing,
             When(Changed)
-                .Then(ctx => ApplyChanged(ctx.Saga, ctx.Message, clock))
-                .Then(ctx => SettleSaga(ctx, clock))
+                .Then(ApplyChanged)
+                .Then(SettleSaga)
                 .TransitionTo(Synced));
 
         // Catch-all: every event bumps UpdatedOn and initialises CreatedOn once.
         During(
             Initial, Syncing, Synced,
-            When(SyncDue).Then(ctx => UpdateSaga(ctx, clock)),
-            When(Changed).Then(ctx => UpdateSaga(ctx, clock)),
-            When(Heartbeat).Then(ctx => UpdateSaga(ctx, clock)));
+            When(SyncDue).Then(UpdateSaga),
+            When(Changed).Then(UpdateSaga),
+            When(Heartbeat).Then(UpdateSaga));
     }
 
-    private static void ApplyChanged(GuildSagaState saga, GuildChanged msg, ISystemClock clock)
+    private static void ApplyChanged(BehaviorContext<GuildSagaState, GuildChanged> ctx)
     {
-        saga.Name = msg.Name;
-        saga.Roles = msg.Roles;
+        ctx.Saga.Name = ctx.Message.Name;
+        ctx.Saga.Roles = ctx.Message.Roles;
         // Only ratchet to absent — presence is restored via admin action, not via event.
         // IsPresent=false is the sentinel; IsPresent=true (the default) doesn't restore a revoked saga.
-        if (!msg.IsPresent)
-            saga.IsPresent = false;
-        saga.LastSyncedAt = clock.UtcNow;
+        if (!ctx.Message.IsPresent)
+            ctx.Saga.IsPresent = false;
+        ctx.Saga.LastSyncedAt = ctx.Message.SyncedAt ?? ctx.SentTime ?? ctx.Saga.LastSyncedAt;
     }
 
-    private static void UpdateSaga(BehaviorContext<GuildSagaState> ctx, ISystemClock clock)
+    private static void UpdateSaga(BehaviorContext<GuildSagaState> ctx)
     {
-        var now = clock.UtcNow;
+        var now = ctx.SentTime ?? ctx.Saga.UpdatedOn;
         if (ctx.Saga.CreatedOn == default) ctx.Saga.CreatedOn = now;
         ctx.Saga.UpdatedOn = now;
     }
 
-    private static void SettleSaga(BehaviorContext<GuildSagaState> ctx, ISystemClock clock)
-        => ctx.Saga.SettledOn = clock.UtcNow;
+    private static void SettleSaga(BehaviorContext<GuildSagaState> ctx)
+        => ctx.Saga.SettledOn = ctx.SentTime ?? ctx.Saga.UpdatedOn;
 
-    // ReSharper disable UnassignedGetOnlyAutoProperty
-    public State Syncing { get; private set; } = null!;
-    public State Synced { get; private set; } = null!;
+    public State Syncing { get; }
+    public State Synced { get; }
 
-    public Event<GuildSyncDue> SyncDue { get; private set; } = null!;
-    public Event<GuildChanged> Changed { get; private set; } = null!;
-    public Event<SyncHeartbeat> Heartbeat { get; private set; } = null!;
+    public Event<GuildSyncDue> SyncDue { get; }
+    public Event<GuildChanged> Changed { get; }
+    public Event<SyncHeartbeat> Heartbeat { get; }
 }
