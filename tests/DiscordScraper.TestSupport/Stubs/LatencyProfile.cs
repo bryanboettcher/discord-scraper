@@ -11,12 +11,12 @@ public abstract record LatencyProfile<TIn>
     /// <summary>
     /// Fixed latency for every call.
     /// </summary>
-    public sealed record Constant(TimeSpan Duration) : LatencyProfile<TIn>
+    public sealed record Constant(TimeSpan Duration, TimeProvider? TimeProvider = null) : LatencyProfile<TIn>
     {
         public override async ValueTask Delay(TIn _, CancellationToken ct)
         {
             if (Duration > TimeSpan.Zero)
-                await Task.Delay(Duration, ct);
+                await Task.Delay(Duration, TimeProvider ?? System.TimeProvider.System, ct);
         }
     }
 
@@ -42,7 +42,7 @@ public abstract record LatencyProfile<TIn>
     /// Median is the 50th percentile of the latency distribution.
     /// Sigma controls the spread; typical values 0.2–1.0.
     /// </summary>
-    public sealed record Lognormal(TimeSpan Median, double Sigma) : LatencyProfile<TIn>
+    public sealed record Lognormal(TimeSpan Median, double Sigma, TimeProvider? TimeProvider = null) : LatencyProfile<TIn>
     {
         public override async ValueTask Delay(TIn _, CancellationToken ct)
         {
@@ -57,7 +57,7 @@ public abstract record LatencyProfile<TIn>
             var logMs = mu + Sigma * z;
             var delayMs = Math.Exp(logMs);
             if (delayMs > 0)
-                await Task.Delay(TimeSpan.FromMilliseconds(delayMs), ct);
+                await Task.Delay(TimeSpan.FromMilliseconds(delayMs), TimeProvider ?? System.TimeProvider.System, ct);
         }
     }
 
@@ -66,8 +66,10 @@ public abstract record LatencyProfile<TIn>
     /// <see cref="PerCall"/> on each call. Useful for approximating warmup ramps
     /// or memory-pressure tails.
     /// </summary>
-    public sealed record Drift(TimeSpan Start, TimeSpan PerCall) : StreamLatencyProfile<TIn>
+    public sealed record Drift(TimeSpan Start, TimeSpan PerCall, TimeProvider? Clock = null) : StreamLatencyProfile<TIn>
     {
+        protected override TimeProvider TimeProvider => Clock ?? System.TimeProvider.System;
+
         protected override IEnumerable<TimeSpan> GenerateDelays()
         {
             var d = Start;
@@ -82,13 +84,13 @@ public abstract record LatencyProfile<TIn>
     /// <summary>
     /// Latency computed from the input. Allows per-payload latency decisions.
     /// </summary>
-    public sealed record FromInput(Func<TIn, TimeSpan> Selector) : LatencyProfile<TIn>
+    public sealed record FromInput(Func<TIn, TimeSpan> Selector, TimeProvider? TimeProvider = null) : LatencyProfile<TIn>
     {
         public override async ValueTask Delay(TIn input, CancellationToken ct)
         {
             var delay = Selector(input);
             if (delay > TimeSpan.Zero)
-                await Task.Delay(delay, ct);
+                await Task.Delay(delay, TimeProvider ?? System.TimeProvider.System, ct);
         }
     }
 }
@@ -110,6 +112,9 @@ public abstract record StreamLatencyProfile<TIn> : LatencyProfile<TIn>
         _delays = GenerateDelays().GetEnumerator();
     }
 
+    /// <summary>Override to inject a FakeTimeProvider in tests; defaults to wall-clock.</summary>
+    protected virtual TimeProvider TimeProvider => System.TimeProvider.System;
+
     protected abstract IEnumerable<TimeSpan> GenerateDelays();
 
     public sealed override async ValueTask Delay(TIn _, CancellationToken ct)
@@ -122,6 +127,6 @@ public abstract record StreamLatencyProfile<TIn> : LatencyProfile<TIn>
 
         var delay = _delays.Current;
         if (delay > TimeSpan.Zero)
-            await Task.Delay(delay, ct);
+            await Task.Delay(delay, TimeProvider, ct);
     }
 }

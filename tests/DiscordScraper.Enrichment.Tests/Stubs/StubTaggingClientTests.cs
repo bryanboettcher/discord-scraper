@@ -26,17 +26,25 @@ public class StubTaggingClientTests
     [Test]
     public async Task TagAsync_WithConstantLatency_DelaysCorrectly()
     {
-        var latency = new LatencyProfile<string>.Constant(TimeSpan.FromMilliseconds(100));
+        // FakeTimeProvider makes the latency assertion deterministic — wall-clock variants of
+        // this test were flaky under docker's scheduling jitter (Task.Delay returning at 99ms
+        // when 100ms was expected). The test still verifies that the latency profile actually
+        // gates the stub's response.
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        var latency = new LatencyProfile<string>.Constant(TimeSpan.FromMilliseconds(100), time);
         var stub = new StubTaggingClient(
             latency,
             new FailureProfile<string>.None(),
             OutputGeneratorHelpers.DeterministicTags(3));
 
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        await stub.TagAsync("test");
-        sw.Stop();
+        var task = stub.TagAsync("test");
+        Assert.That(task.IsCompleted, Is.False, "Should not complete before time advances past latency");
 
-        Assert.That(sw.ElapsedMilliseconds, Is.GreaterThanOrEqualTo(100));
+        time.Advance(TimeSpan.FromMilliseconds(99));
+        Assert.That(task.IsCompleted, Is.False, "Should not complete at 99ms");
+
+        time.Advance(TimeSpan.FromMilliseconds(1));
+        await task;
     }
 
     [Test]
@@ -87,24 +95,25 @@ public class StubTaggingClientTests
     [Test]
     public async Task TagAsync_WithFromInputLatency_VariesByInput()
     {
-        var latency = new LatencyProfile<string>.FromInput(input =>
-            input.Length > 5 ? TimeSpan.FromMilliseconds(50) : TimeSpan.Zero);
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        var latency = new LatencyProfile<string>.FromInput(
+            input => input.Length > 5 ? TimeSpan.FromMilliseconds(50) : TimeSpan.Zero,
+            time);
 
         var stub = new StubTaggingClient(
             latency,
             new FailureProfile<string>.None(),
             OutputGeneratorHelpers.DeterministicTags(3));
 
-        var sw1 = System.Diagnostics.Stopwatch.StartNew();
+        // Short input → Selector returns Zero → no Task.Delay → completes synchronously.
         await stub.TagAsync("short");
-        sw1.Stop();
 
-        var sw2 = System.Diagnostics.Stopwatch.StartNew();
-        await stub.TagAsync("verylongstring");
-        sw2.Stop();
+        // Long input → Selector returns 50ms → awaits Task.Delay against FakeTimeProvider.
+        var task = stub.TagAsync("verylongstring");
+        Assert.That(task.IsCompleted, Is.False, "Long-input tag should not complete before time advances");
 
-        Assert.That(sw1.ElapsedMilliseconds, Is.LessThan(30));
-        Assert.That(sw2.ElapsedMilliseconds, Is.GreaterThanOrEqualTo(50));
+        time.Advance(TimeSpan.FromMilliseconds(50));
+        await task;
     }
 
     [Test]
