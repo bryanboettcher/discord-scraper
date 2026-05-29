@@ -67,17 +67,25 @@ public sealed class MessageSagaStateMachineTests
                     await ctx.RespondAsync(new ProjectMessageResponse(ir));
                 });
 
-                cfg.AddHandler<TagMessageRequest>(async ctx =>
+                cfg.AddHandler<TagMessageRequested>(async ctx =>
                 {
-                    await ctx.RespondAsync(new TagMessageResponse { Embedding = StubEmbedding,
-                        EmbeddingModelVersion = StubEmbeddingModel });
+                    await ctx.Publish<MessageTagged>(new
+                    {
+                        ctx.Message.MessageSnowflake,
+                        Embedding = StubEmbedding,
+                        EmbeddingModelVersion = StubEmbeddingModel,
+                    });
                 });
 
-                cfg.AddHandler<ClassifyMessageRequest>(async ctx =>
+                cfg.AddHandler<ClassifyMessageRequested>(async ctx =>
                 {
-                    await ctx.RespondAsync(new ClassifyMessageResponse { Tags = StubTags,
+                    await ctx.Publish<MessageClassified>(new
+                    {
+                        ctx.Message.MessageSnowflake,
+                        Tags = StubTags,
                         ClassifyModelVersion = StubTagModel,
-                        IndexedAt = FixedIndexedAt });
+                        IndexedAt = FixedIndexedAt,
+                    });
                 });
             })
             .BuildServiceProvider(true);
@@ -107,7 +115,7 @@ public sealed class MessageSagaStateMachineTests
             .BuildServiceProvider(true);
     }
 
-    // Provider that stubs through Project but parks at Tagging (no TagMessageRequest handler).
+    // Provider that stubs through Project but parks at Tagging (no TagMessageRequested handler).
     private static ServiceProvider BuildProviderTagPending(ISystemClock clock)
     {
         return new ServiceCollection()
@@ -131,12 +139,12 @@ public sealed class MessageSagaStateMachineTests
                 {
                     await ctx.RespondAsync(new ProjectMessageResponse(StubIR));
                 });
-                // No TagMessageRequest handler — saga stays in Tagging state
+                // No TagMessageRequested handler — no MessageTagged published, saga stays in Tagging.
             })
             .BuildServiceProvider(true);
     }
 
-    // Provider that stubs through Tag but parks at Classifying (no ClassifyMessageRequest handler).
+    // Provider that stubs through Tag but parks at Classifying (no ClassifyMessageRequested handler).
     private static ServiceProvider BuildProviderClassifyPending(ISystemClock clock)
     {
         return new ServiceCollection()
@@ -161,12 +169,16 @@ public sealed class MessageSagaStateMachineTests
                     await ctx.RespondAsync(new ProjectMessageResponse(StubIR));
                 });
 
-                cfg.AddHandler<TagMessageRequest>(async ctx =>
+                cfg.AddHandler<TagMessageRequested>(async ctx =>
                 {
-                    await ctx.RespondAsync(new TagMessageResponse { Embedding = StubEmbedding,
-                        EmbeddingModelVersion = StubEmbeddingModel });
+                    await ctx.Publish<MessageTagged>(new
+                    {
+                        ctx.Message.MessageSnowflake,
+                        Embedding = StubEmbedding,
+                        EmbeddingModelVersion = StubEmbeddingModel,
+                    });
                 });
-                // No ClassifyMessageRequest handler — saga stays in Classifying state
+                // No ClassifyMessageRequested handler — no MessageClassified published, saga stays in Classifying.
             })
             .BuildServiceProvider(true);
     }
@@ -570,17 +582,25 @@ public sealed class MessageSagaStateMachineTests
                 });
 
                 // Tag + Classify stubs so saga can complete after the re-loop.
-                cfg.AddHandler<TagMessageRequest>(async ctx =>
+                cfg.AddHandler<TagMessageRequested>(async ctx =>
                 {
-                    await ctx.RespondAsync(new TagMessageResponse { Embedding = StubEmbedding,
-                        EmbeddingModelVersion = StubEmbeddingModel });
+                    await ctx.Publish<MessageTagged>(new
+                    {
+                        ctx.Message.MessageSnowflake,
+                        Embedding = StubEmbedding,
+                        EmbeddingModelVersion = StubEmbeddingModel,
+                    });
                 });
 
-                cfg.AddHandler<ClassifyMessageRequest>(async ctx =>
+                cfg.AddHandler<ClassifyMessageRequested>(async ctx =>
                 {
-                    await ctx.RespondAsync(new ClassifyMessageResponse { Tags = StubTags,
+                    await ctx.Publish<MessageClassified>(new
+                    {
+                        ctx.Message.MessageSnowflake,
+                        Tags = StubTags,
                         ClassifyModelVersion = StubTagModel,
-                        IndexedAt = FixedIndexedAt });
+                        IndexedAt = FixedIndexedAt,
+                    });
                 });
             })
             .BuildServiceProvider(true);
@@ -648,17 +668,25 @@ public sealed class MessageSagaStateMachineTests
                     await ctx.RespondAsync(new ProjectMessageResponse(StubIR));
                 });
 
-                cfg.AddHandler<TagMessageRequest>(async ctx =>
+                cfg.AddHandler<TagMessageRequested>(async ctx =>
                 {
-                    await ctx.RespondAsync(new TagMessageResponse { Embedding = StubEmbedding,
-                        EmbeddingModelVersion = StubEmbeddingModel });
+                    await ctx.Publish<MessageTagged>(new
+                    {
+                        ctx.Message.MessageSnowflake,
+                        Embedding = StubEmbedding,
+                        EmbeddingModelVersion = StubEmbeddingModel,
+                    });
                 });
 
-                cfg.AddHandler<ClassifyMessageRequest>(async ctx =>
+                cfg.AddHandler<ClassifyMessageRequested>(async ctx =>
                 {
-                    await ctx.RespondAsync(new ClassifyMessageResponse { Tags = StubTags,
+                    await ctx.Publish<MessageClassified>(new
+                    {
+                        ctx.Message.MessageSnowflake,
+                        Tags = StubTags,
                         ClassifyModelVersion = StubTagModel,
-                        IndexedAt = FixedIndexedAt });
+                        IndexedAt = FixedIndexedAt,
+                    });
                 });
             })
             .BuildServiceProvider(true);
@@ -707,11 +735,11 @@ public sealed class MessageSagaStateMachineTests
     // =========================================================================
 
     // -------------------------------------------------------------------------
-    // Test 12: TagRequest.Faulted → Faulted
+    // Test 12: Fault<TagMessageRequested> → Faulted
     // -------------------------------------------------------------------------
 
     [Test]
-    public async Task TagRequest_Faulted_transitions_to_Faulted()
+    public async Task TagFault_transitions_to_Faulted()
     {
         var clock = MakeClock();
         await using var provider = new ServiceCollection()
@@ -730,7 +758,8 @@ public sealed class MessageSagaStateMachineTests
                 cfg.AddHandler<ProjectMessageRequest>(async ctx =>
                     await ctx.RespondAsync(new ProjectMessageResponse(StubIR)));
 
-                cfg.AddHandler<TagMessageRequest>((Func<ConsumeContext<TagMessageRequest>, Task>)(_ =>
+                // Consumer throws — MT auto-publishes Fault<TagMessageRequested>.
+                cfg.AddHandler<TagMessageRequested>((Func<ConsumeContext<TagMessageRequested>, Task>)(_ =>
                     throw new InvalidOperationException("embedding exploded")));
             })
             .BuildServiceProvider(true);
@@ -745,47 +774,65 @@ public sealed class MessageSagaStateMachineTests
 
         var sagaHarness = harness.GetSagaStateMachineHarness<MessageSagaStateMachine, MessageSagaState>();
         var sagaId = await sagaHarness.Exists(expectedId, m => m.Faulted, timeout: TimeSpan.FromSeconds(10));
-        sagaId.ShouldNotBeNull("Saga should reach Faulted when TagRequest consumer throws");
+        sagaId.ShouldNotBeNull("Saga should reach Faulted when TagMessageRequested consumer throws");
     }
 
     // -------------------------------------------------------------------------
-    // Test 13: TagRequest.TimeoutExpired → Faulted
+    // Test 13: Fault<ClassifyMessageRequested> → Faulted (embedding preserved)
+    //          Renamed from TimeoutExpired — timeouts are no longer saga-managed.
     // -------------------------------------------------------------------------
 
     [Test]
-    public async Task TagRequest_TimeoutExpired_transitions_to_Faulted()
+    public async Task ClassifyFault_transitions_to_Faulted_with_embedding_preserved()
     {
         var clock = MakeClock();
-        await using var provider = BuildProviderTagPending(clock);
+        await using var provider = new ServiceCollection()
+            .AddSingleton(clock)
+            .AddMassTransitTestHarness(cfg =>
+            {
+                cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
+                    .InMemoryRepository();
+
+                cfg.AddHandler<AnalyzeMessageRequest>(async ctx =>
+                    await ctx.RespondAsync<AnalyzeMessageResponse>(new
+                    {
+                        IsSubstantive = true, IsBot = false, DetectedLanguage = "en",
+                    }));
+
+                cfg.AddHandler<ProjectMessageRequest>(async ctx =>
+                    await ctx.RespondAsync(new ProjectMessageResponse(StubIR)));
+
+                cfg.AddHandler<TagMessageRequested>(async ctx =>
+                    await ctx.Publish<MessageTagged>(new
+                    {
+                        ctx.Message.MessageSnowflake,
+                        Embedding = StubEmbedding,
+                        EmbeddingModelVersion = StubEmbeddingModel,
+                    }));
+
+                // Consumer throws — MT auto-publishes Fault<ClassifyMessageRequested>.
+                cfg.AddHandler<ClassifyMessageRequested>((Func<ConsumeContext<ClassifyMessageRequested>, Task>)(_ =>
+                    throw new InvalidOperationException("llm exploded")));
+            })
+            .BuildServiceProvider(true);
 
         var harness = provider.GetTestHarness();
         await harness.Start();
 
-        const long snowflake = 761000000000000001L;
+        const long snowflake = 770000000000000001L;
         var expectedId = DeterministicGuid.FromSnowflake(snowflake);
 
         await harness.Bus.Publish<MessageCaptured>(BuildMessageCaptured(snowflake));
 
         var sagaHarness = harness.GetSagaStateMachineHarness<MessageSagaStateMachine, MessageSagaState>();
-        var machine = provider.GetRequiredService<MessageSagaStateMachine>();
+        var sagaId = await sagaHarness.Exists(expectedId, m => m.Faulted, timeout: TimeSpan.FromSeconds(10));
+        sagaId.ShouldNotBeNull("Saga should reach Faulted when ClassifyMessageRequested consumer throws");
 
-        await sagaHarness.Exists(expectedId, machine.Tagging, timeout: TimeSpan.FromSeconds(5));
-
+        // Embedding must be preserved when Classify faults — replay can skip re-embedding.
         var saga = sagaHarness.Sagas.Contains(expectedId);
         saga.ShouldNotBeNull();
-        var requestId = saga.TagRequestId;
-        requestId.ShouldNotBeNull("TagRequestId must be set while in Tagging");
-
-        await harness.Bus.Publish<RequestTimeoutExpired<TagMessageRequest>>(new
-        {
-            RequestId = requestId.Value,
-            CorrelationId = expectedId,
-            Timestamp = DateTime.UtcNow,
-            ExpirationTime = DateTime.UtcNow,
-        });
-
-        var sagaId = await sagaHarness.Exists(expectedId, m => m.Faulted, timeout: TimeSpan.FromSeconds(5));
-        sagaId.ShouldNotBeNull("Saga should reach Faulted when TagRequest timeout fires");
+        saga.Embedding.ShouldNotBeNull("Embedding must be preserved after Classify fault");
+        saga.Tags.ShouldBeNull("Tags must not be set when Classify faulted");
     }
 
     // -------------------------------------------------------------------------
@@ -812,11 +859,15 @@ public sealed class MessageSagaStateMachineTests
                 cfg.AddHandler<ProjectMessageRequest>(async ctx =>
                     await ctx.RespondAsync(new ProjectMessageResponse(StubIR)));
 
-                cfg.AddHandler<TagMessageRequest>(async ctx =>
-                    await ctx.RespondAsync(new TagMessageResponse { Embedding = StubEmbedding,
-                        EmbeddingModelVersion = StubEmbeddingModel }));
+                cfg.AddHandler<TagMessageRequested>(async ctx =>
+                    await ctx.Publish<MessageTagged>(new
+                    {
+                        ctx.Message.MessageSnowflake,
+                        Embedding = StubEmbedding,
+                        EmbeddingModelVersion = StubEmbeddingModel,
+                    }));
 
-                cfg.AddHandler<ClassifyMessageRequest>((Func<ConsumeContext<ClassifyMessageRequest>, Task>)(_ =>
+                cfg.AddHandler<ClassifyMessageRequested>((Func<ConsumeContext<ClassifyMessageRequested>, Task>)(_ =>
                     throw new InvalidOperationException("llm exploded")));
             })
             .BuildServiceProvider(true);
@@ -824,7 +875,7 @@ public sealed class MessageSagaStateMachineTests
         var harness = provider.GetTestHarness();
         await harness.Start();
 
-        const long snowflake = 770000000000000001L;
+        const long snowflake = 771000000000000001L;
         var expectedId = DeterministicGuid.FromSnowflake(snowflake);
 
         await harness.Bus.Publish<MessageCaptured>(BuildMessageCaptured(snowflake));
@@ -838,50 +889,6 @@ public sealed class MessageSagaStateMachineTests
         saga.ShouldNotBeNull();
         saga.Embedding.ShouldNotBeNull("Embedding must be preserved after Classify fault");
         saga.Tags.ShouldBeNull("Tags must not be set when Classify faulted");
-    }
-
-    // -------------------------------------------------------------------------
-    // Test 15: ClassifyRequest.TimeoutExpired → Faulted (embedding preserved)
-    // -------------------------------------------------------------------------
-
-    [Test]
-    public async Task ClassifyRequest_TimeoutExpired_transitions_to_Faulted_with_embedding_preserved()
-    {
-        var clock = MakeClock();
-        await using var provider = BuildProviderClassifyPending(clock);
-
-        var harness = provider.GetTestHarness();
-        await harness.Start();
-
-        const long snowflake = 771000000000000001L;
-        var expectedId = DeterministicGuid.FromSnowflake(snowflake);
-
-        await harness.Bus.Publish<MessageCaptured>(BuildMessageCaptured(snowflake));
-
-        var sagaHarness = harness.GetSagaStateMachineHarness<MessageSagaStateMachine, MessageSagaState>();
-        var machine = provider.GetRequiredService<MessageSagaStateMachine>();
-
-        await sagaHarness.Exists(expectedId, machine.Classifying, timeout: TimeSpan.FromSeconds(5));
-
-        var saga = sagaHarness.Sagas.Contains(expectedId);
-        saga.ShouldNotBeNull();
-        var requestId = saga.ClassifyRequestId;
-        requestId.ShouldNotBeNull("ClassifyRequestId must be set while in Classifying");
-
-        await harness.Bus.Publish<RequestTimeoutExpired<ClassifyMessageRequest>>(new
-        {
-            RequestId = requestId.Value,
-            CorrelationId = expectedId,
-            Timestamp = DateTime.UtcNow,
-            ExpirationTime = DateTime.UtcNow,
-        });
-
-        var sagaId = await sagaHarness.Exists(expectedId, m => m.Faulted, timeout: TimeSpan.FromSeconds(5));
-        sagaId.ShouldNotBeNull("Saga should reach Faulted when ClassifyRequest timeout fires");
-
-        var sagaAfter = sagaHarness.Sagas.Contains(expectedId);
-        sagaAfter.ShouldNotBeNull();
-        sagaAfter.Embedding.ShouldNotBeNull("Embedding must be preserved after Classify timeout");
     }
 
     // -------------------------------------------------------------------------
@@ -981,19 +988,27 @@ public sealed class MessageSagaStateMachineTests
                     await ctx.RespondAsync(new ProjectMessageResponse(StubIR));
                 });
 
-                cfg.AddHandler<TagMessageRequest>(async ctx =>
+                cfg.AddHandler<TagMessageRequested>(async ctx =>
                 {
                     // Block until the test has published an edit — ensures HasPendingEdit is
-                    // set before the Completed handler fires.
+                    // set before the Tagged event fires.
                     await tagGate.Task;
-                    await ctx.RespondAsync(new TagMessageResponse { Embedding = StubEmbedding,
-                        EmbeddingModelVersion = StubEmbeddingModel });
+                    await ctx.Publish<MessageTagged>(new
+                    {
+                        ctx.Message.MessageSnowflake,
+                        Embedding = StubEmbedding,
+                        EmbeddingModelVersion = StubEmbeddingModel,
+                    });
                 });
 
-                cfg.AddHandler<ClassifyMessageRequest>(async ctx =>
-                    await ctx.RespondAsync(new ClassifyMessageResponse { Tags = StubTags,
+                cfg.AddHandler<ClassifyMessageRequested>(async ctx =>
+                    await ctx.Publish<MessageClassified>(new
+                    {
+                        ctx.Message.MessageSnowflake,
+                        Tags = StubTags,
                         ClassifyModelVersion = StubTagModel,
-                        IndexedAt = FixedIndexedAt }));
+                        IndexedAt = FixedIndexedAt,
+                    }));
             })
             .BuildServiceProvider(true);
 
@@ -1058,16 +1073,24 @@ public sealed class MessageSagaStateMachineTests
                     await ctx.RespondAsync(new ProjectMessageResponse(StubIR));
                 });
 
-                cfg.AddHandler<TagMessageRequest>(async ctx =>
-                    await ctx.RespondAsync(new TagMessageResponse { Embedding = StubEmbedding,
-                        EmbeddingModelVersion = StubEmbeddingModel }));
+                cfg.AddHandler<TagMessageRequested>(async ctx =>
+                    await ctx.Publish<MessageTagged>(new
+                    {
+                        ctx.Message.MessageSnowflake,
+                        Embedding = StubEmbedding,
+                        EmbeddingModelVersion = StubEmbeddingModel,
+                    }));
 
-                cfg.AddHandler<ClassifyMessageRequest>(async ctx =>
+                cfg.AddHandler<ClassifyMessageRequested>(async ctx =>
                 {
                     await classifyGate.Task;
-                    await ctx.RespondAsync(new ClassifyMessageResponse { Tags = StubTags,
+                    await ctx.Publish<MessageClassified>(new
+                    {
+                        ctx.Message.MessageSnowflake,
+                        Tags = StubTags,
                         ClassifyModelVersion = StubTagModel,
-                        IndexedAt = FixedIndexedAt });
+                        IndexedAt = FixedIndexedAt,
+                    });
                 });
             })
             .BuildServiceProvider(true);
@@ -1171,14 +1194,22 @@ public sealed class MessageSagaStateMachineTests
                 cfg.AddHandler<ProjectMessageRequest>(async ctx =>
                     await ctx.RespondAsync(new ProjectMessageResponse(StubIR)));
 
-                cfg.AddHandler<TagMessageRequest>(async ctx =>
-                    await ctx.RespondAsync(new TagMessageResponse { Embedding = StubEmbedding,
-                        EmbeddingModelVersion = embeddingModel }));
+                cfg.AddHandler<TagMessageRequested>(async ctx =>
+                    await ctx.Publish<MessageTagged>(new
+                    {
+                        ctx.Message.MessageSnowflake,
+                        Embedding = StubEmbedding,
+                        EmbeddingModelVersion = embeddingModel,
+                    }));
 
-                cfg.AddHandler<ClassifyMessageRequest>(async ctx =>
-                    await ctx.RespondAsync(new ClassifyMessageResponse { Tags = StubTags,
+                cfg.AddHandler<ClassifyMessageRequested>(async ctx =>
+                    await ctx.Publish<MessageClassified>(new
+                    {
+                        ctx.Message.MessageSnowflake,
+                        Tags = StubTags,
                         ClassifyModelVersion = tagModel,
-                        IndexedAt = FixedIndexedAt }));
+                        IndexedAt = FixedIndexedAt,
+                    }));
             })
             .BuildServiceProvider(true);
     }
@@ -1213,20 +1244,24 @@ public sealed class MessageSagaStateMachineTests
                 cfg.AddHandler<ProjectMessageRequest>(async ctx =>
                     await ctx.RespondAsync(new ProjectMessageResponse(StubIR)));
 
-                cfg.AddHandler<TagMessageRequest>(async ctx =>
-                    await ctx.RespondAsync(new TagMessageResponse { Embedding = StubEmbedding,
-                        EmbeddingModelVersion = StubEmbeddingModel }));
+                cfg.AddHandler<TagMessageRequested>(async ctx =>
+                    await ctx.Publish<MessageTagged>(new
+                    {
+                        ctx.Message.MessageSnowflake,
+                        Embedding = StubEmbedding,
+                        EmbeddingModelVersion = StubEmbeddingModel,
+                    }));
 
-                cfg.AddHandler<ClassifyMessageRequest>(async ctx =>
+                cfg.AddHandler<ClassifyMessageRequested>(async ctx =>
                 {
-                    var n = Interlocked.Increment(ref classifyCount);
-                    var model = n == 1 ? oldModel : newModel;
-                    await ctx.RespondAsync(new ClassifyMessageResponse { Tags = StubTags,
+                    Interlocked.Increment(ref classifyCount);
+                    await ctx.Publish<MessageClassified>(new
+                    {
+                        ctx.Message.MessageSnowflake,
+                        Tags = StubTags,
                         ClassifyModelVersion = StubTagModel,
-                        IndexedAt = FixedIndexedAt });
-                    // EmbeddingModelVersion comes from TagMessageResponse, stored on saga.
-                    // ClassifyMessageResponse only carries ClassifyModelVersion + IndexedAt.
-                    _ = model; // suppress unused warning — version tracked via TagRequest
+                        IndexedAt = FixedIndexedAt,
+                    });
                 });
             })
             .BuildServiceProvider(true);
@@ -1401,21 +1436,29 @@ public sealed class MessageSagaStateMachineTests
                 cfg.AddHandler<ProjectMessageRequest>(async ctx =>
                     await ctx.RespondAsync(new ProjectMessageResponse(StubIR)));
 
-                cfg.AddHandler<TagMessageRequest>(async ctx =>
+                cfg.AddHandler<TagMessageRequested>(async ctx =>
                 {
                     var embeddingModel = Interlocked.Increment(ref tagCount) == 1
                         ? oldEmbeddingModel
                         : newEmbeddingModel;
-                    await ctx.RespondAsync(new TagMessageResponse { Embedding = StubEmbedding,
-                        EmbeddingModelVersion = embeddingModel });
+                    await ctx.Publish<MessageTagged>(new
+                    {
+                        ctx.Message.MessageSnowflake,
+                        Embedding = StubEmbedding,
+                        EmbeddingModelVersion = embeddingModel,
+                    });
                 });
 
-                cfg.AddHandler<ClassifyMessageRequest>(async ctx =>
+                cfg.AddHandler<ClassifyMessageRequested>(async ctx =>
                 {
                     Interlocked.Increment(ref classifyCount);
-                    await ctx.RespondAsync(new ClassifyMessageResponse { Tags = StubTags,
+                    await ctx.Publish<MessageClassified>(new
+                    {
+                        ctx.Message.MessageSnowflake,
+                        Tags = StubTags,
                         ClassifyModelVersion = StubTagModel,
-                        IndexedAt = FixedIndexedAt });
+                        IndexedAt = FixedIndexedAt,
+                    });
                 });
             })
             .BuildServiceProvider(true);
@@ -1507,7 +1550,7 @@ public sealed class MessageSagaStateMachineTests
                 cfg.AddHandler<ProjectMessageRequest>(async ctx =>
                     await ctx.RespondAsync(new ProjectMessageResponse(StubIR)));
 
-                cfg.AddHandler<TagMessageRequest>((Func<ConsumeContext<TagMessageRequest>, Task>)(_ =>
+                cfg.AddHandler<TagMessageRequested>((Func<ConsumeContext<TagMessageRequested>, Task>)(_ =>
                     throw new InvalidOperationException("embedding unavailable")));
             })
             .BuildServiceProvider(true);
@@ -1532,11 +1575,15 @@ public sealed class MessageSagaStateMachineTests
                 cfg.AddHandler<ProjectMessageRequest>(async ctx =>
                     await ctx.RespondAsync(new ProjectMessageResponse(StubIR)));
 
-                cfg.AddHandler<TagMessageRequest>(async ctx =>
-                    await ctx.RespondAsync(new TagMessageResponse { Embedding = StubEmbedding,
-                        EmbeddingModelVersion = StubEmbeddingModel }));
+                cfg.AddHandler<TagMessageRequested>(async ctx =>
+                    await ctx.Publish<MessageTagged>(new
+                    {
+                        ctx.Message.MessageSnowflake,
+                        Embedding = StubEmbedding,
+                        EmbeddingModelVersion = StubEmbeddingModel,
+                    }));
 
-                cfg.AddHandler<ClassifyMessageRequest>((Func<ConsumeContext<ClassifyMessageRequest>, Task>)(_ =>
+                cfg.AddHandler<ClassifyMessageRequested>((Func<ConsumeContext<ClassifyMessageRequested>, Task>)(_ =>
                     throw new InvalidOperationException("llm unavailable")));
             })
             .BuildServiceProvider(true);
@@ -1568,20 +1615,28 @@ public sealed class MessageSagaStateMachineTests
                 cfg.AddHandler<ProjectMessageRequest>(async ctx =>
                     await ctx.RespondAsync(new ProjectMessageResponse(StubIR)));
 
-                cfg.AddHandler<TagMessageRequest>(async ctx =>
+                cfg.AddHandler<TagMessageRequested>(async ctx =>
                 {
-                    // First call faults, second succeeds (replay).
+                    // First call faults (consumer throws → Fault<TagMessageRequested>), second succeeds (replay).
                     if (Interlocked.Increment(ref tagCount) == 1)
                         throw new InvalidOperationException("first attempt fails");
 
-                    await ctx.RespondAsync(new TagMessageResponse { Embedding = StubEmbedding,
-                        EmbeddingModelVersion = StubEmbeddingModel });
+                    await ctx.Publish<MessageTagged>(new
+                    {
+                        ctx.Message.MessageSnowflake,
+                        Embedding = StubEmbedding,
+                        EmbeddingModelVersion = StubEmbeddingModel,
+                    });
                 });
 
-                cfg.AddHandler<ClassifyMessageRequest>(async ctx =>
-                    await ctx.RespondAsync(new ClassifyMessageResponse { Tags = StubTags,
+                cfg.AddHandler<ClassifyMessageRequested>(async ctx =>
+                    await ctx.Publish<MessageClassified>(new
+                    {
+                        ctx.Message.MessageSnowflake,
+                        Tags = StubTags,
                         ClassifyModelVersion = StubTagModel,
-                        IndexedAt = FixedIndexedAt }));
+                        IndexedAt = FixedIndexedAt,
+                    }));
             })
             .BuildServiceProvider(true);
 
@@ -1595,7 +1650,6 @@ public sealed class MessageSagaStateMachineTests
         await harness.Bus.Publish<MessageCaptured>(BuildMessageCaptured(snowflake));
         await sagaHarness.Exists(expectedId, m => m.Faulted, timeout: TimeSpan.FromSeconds(10));
 
-        // ClearRequestIdOnFaulted: after fault, TagRequestId must be null so replay can re-fire.
         var faultedSaga = sagaHarness.Sagas.Contains(expectedId);
         faultedSaga.ShouldNotBeNull();
         faultedSaga.Embedding.ShouldBeNull("No embedding stored when Tag faulted");
@@ -1644,19 +1698,28 @@ public sealed class MessageSagaStateMachineTests
                 cfg.AddHandler<ProjectMessageRequest>(async ctx =>
                     await ctx.RespondAsync(new ProjectMessageResponse(StubIR)));
 
-                cfg.AddHandler<TagMessageRequest>(async ctx =>
-                    await ctx.RespondAsync(new TagMessageResponse { Embedding = StubEmbedding,
-                        EmbeddingModelVersion = StubEmbeddingModel }));
+                cfg.AddHandler<TagMessageRequested>(async ctx =>
+                    await ctx.Publish<MessageTagged>(new
+                    {
+                        ctx.Message.MessageSnowflake,
+                        Embedding = StubEmbedding,
+                        EmbeddingModelVersion = StubEmbeddingModel,
+                    }));
 
-                cfg.AddHandler<ClassifyMessageRequest>(async ctx =>
+                cfg.AddHandler<ClassifyMessageRequested>(async ctx =>
                 {
-                    // First call faults, second succeeds (replay skips Tag — embedding preserved).
+                    // First call faults (consumer throws → Fault<ClassifyMessageRequested>),
+                    // second succeeds (replay skips Tag — embedding preserved).
                     if (Interlocked.Increment(ref classifyCount) == 1)
                         throw new InvalidOperationException("first classify attempt fails");
 
-                    await ctx.RespondAsync(new ClassifyMessageResponse { Tags = StubTags,
+                    await ctx.Publish<MessageClassified>(new
+                    {
+                        ctx.Message.MessageSnowflake,
+                        Tags = StubTags,
                         ClassifyModelVersion = StubTagModel,
-                        IndexedAt = FixedIndexedAt });
+                        IndexedAt = FixedIndexedAt,
+                    });
                 });
             })
             .BuildServiceProvider(true);
@@ -1696,12 +1759,13 @@ public sealed class MessageSagaStateMachineTests
     }
 
     // -------------------------------------------------------------------------
-    // Test 29: ClearRequestIdOnFaulted round-trip — stale TagRequestId is nulled after fault
-    //          so a second Request(TagRequest) gets a fresh correlation ID.
+    // Test 29: TagFault — embedding not stored, saga settles in Faulted.
+    //          (ClearRequestIdOnFaulted is no longer applicable — Tag/Classify are
+    //          event-driven; no request IDs on the saga for these phases.)
     // -------------------------------------------------------------------------
 
     [Test]
-    public async Task ClearRequestIdOnFaulted_nulls_TagRequestId_after_fault()
+    public async Task TagFault_saga_has_no_embedding_in_Faulted_state()
     {
         var clock = MakeClock();
         await using var provider = BuildProviderTagFaulted(clock);
@@ -1716,11 +1780,9 @@ public sealed class MessageSagaStateMachineTests
         await harness.Bus.Publish<MessageCaptured>(BuildMessageCaptured(snowflake));
         await sagaHarness.Exists(expectedId, m => m.Faulted, timeout: TimeSpan.FromSeconds(10));
 
-        // ClearRequestIdOnFaulted must null the request ID on the saga after fault.
         var saga = sagaHarness.Sagas.Contains(expectedId);
         saga.ShouldNotBeNull();
-        saga.TagRequestId.ShouldBeNull(
-            "ClearRequestIdOnFaulted must null TagRequestId so replay can fire a fresh correlation");
+        saga.Embedding.ShouldBeNull("Embedding must not be stored when TagMessageRequested consumer faults");
     }
 
     // -------------------------------------------------------------------------
@@ -1870,24 +1932,26 @@ public sealed class MessageSagaStateMachineTests
                 cfg.AddHandler<ProjectMessageRequest>(async ctx =>
                     await ctx.RespondAsync(new ProjectMessageResponse(StubIR)));
 
-                cfg.AddHandler<TagMessageRequest>(async ctx =>
+                cfg.AddHandler<TagMessageRequested>(async ctx =>
                 {
                     // First call returns old model; second (re-tag) returns new model.
                     var embeddingModel = Interlocked.Increment(ref tagCount) == 1
                         ? oldEmbeddingModel
                         : newEmbeddingModel;
-                    await ctx.RespondAsync(new TagMessageResponse
+                    await ctx.Publish<MessageTagged>(new
                     {
+                        ctx.Message.MessageSnowflake,
                         Embedding = StubEmbedding,
                         EmbeddingModelVersion = embeddingModel,
                     });
                 });
 
-                cfg.AddHandler<ClassifyMessageRequest>(async ctx =>
+                cfg.AddHandler<ClassifyMessageRequested>(async ctx =>
                 {
                     Interlocked.Increment(ref classifyCount);
-                    await ctx.RespondAsync(new ClassifyMessageResponse
+                    await ctx.Publish<MessageClassified>(new
                     {
+                        ctx.Message.MessageSnowflake,
                         Tags = StubTags,
                         ClassifyModelVersion = StubTagModel,
                         IndexedAt = FixedIndexedAt,
@@ -1928,9 +1992,9 @@ public sealed class MessageSagaStateMachineTests
         var sagaAfter = sagaHarness.Sagas.Contains(expectedId);
         sagaAfter.ShouldNotBeNull();
         sagaAfter.EmbeddingModelVersion.ShouldBe(newEmbeddingModel,
-            "EmbeddingModelVersion must be re-stamped from second TagRequest.Completed under new model");
-        tagCount.ShouldBe(2, "TagRequest fired exactly twice: initial + re-tag");
-        classifyCount.ShouldBe(2, "ClassifyRequest fired exactly twice: initial + re-classify after re-tag");
+            "EmbeddingModelVersion must be re-stamped from second Tagged event under new model");
+        tagCount.ShouldBe(2, "TagMessageRequested fired exactly twice: initial + re-tag");
+        classifyCount.ShouldBe(2, "ClassifyMessageRequested fired exactly twice: initial + re-classify after re-tag");
     }
 
     // -------------------------------------------------------------------------
@@ -1943,7 +2007,6 @@ public sealed class MessageSagaStateMachineTests
     {
         var clock = MakeClock();
         const string oldEmbeddingModel = "nomic-embed-text";
-        const string newEmbeddingModel = "mxbai-embed-large";
         const string newTagModel = "llama3.1:70b";
 
         var classifyCount = 0;
@@ -1964,21 +2027,23 @@ public sealed class MessageSagaStateMachineTests
                 cfg.AddHandler<ProjectMessageRequest>(async ctx =>
                     await ctx.RespondAsync(new ProjectMessageResponse(StubIR)));
 
-                cfg.AddHandler<TagMessageRequest>(async ctx =>
-                    await ctx.RespondAsync(new TagMessageResponse
+                cfg.AddHandler<TagMessageRequested>(async ctx =>
+                    await ctx.Publish<MessageTagged>(new
                     {
+                        ctx.Message.MessageSnowflake,
                         Embedding = StubEmbedding,
                         EmbeddingModelVersion = oldEmbeddingModel,
                     }));
 
-                cfg.AddHandler<ClassifyMessageRequest>(async ctx =>
+                cfg.AddHandler<ClassifyMessageRequested>(async ctx =>
                 {
                     // Second classify call (re-classify) returns the new classify model version.
                     var classifyModel = Interlocked.Increment(ref classifyCount) == 1
                         ? StubTagModel
                         : newTagModel;
-                    await ctx.RespondAsync(new ClassifyMessageResponse
+                    await ctx.Publish<MessageClassified>(new
                     {
+                        ctx.Message.MessageSnowflake,
                         Tags = StubTags,
                         ClassifyModelVersion = classifyModel,
                         IndexedAt = FixedIndexedAt,

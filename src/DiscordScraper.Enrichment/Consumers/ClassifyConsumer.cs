@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using DiscordScraper.Contracts.Clock;
+using DiscordScraper.Contracts.Events.Message;
 using DiscordScraper.Contracts.Requests;
 using DiscordScraper.Core.Vector;
 using DiscordScraper.Enrichment.Ollama;
@@ -9,19 +10,22 @@ using Microsoft.Extensions.Logging;
 namespace DiscordScraper.Enrichment.Consumers;
 
 /// <summary>
-/// Classify phase: LLM topic tagging + vector store indexing.
-/// Receives the pre-computed embedding from the saga (produced by TagConsumer) so it can
-/// upsert the vector point in the same response, removing the separate IndexMessage step.
+/// Classify phase: LLM topic tagging + vector store indexing. Publishes MessageClassified
+/// on success so the saga can transition to Enriched.
 ///
-/// No consumer-level retry — rely on saga fault → replay (per spec).
+/// Receives the pre-computed embedding from ClassifyMessageRequested (produced by TagConsumer
+/// and carried by the saga) so it can upsert the vector point in the same handler.
+///
+/// No try/catch — exceptions propagate and MT auto-publishes Fault&lt;ClassifyMessageRequested&gt;,
+/// which the saga subscribes to for fault handling and replay.
 /// </summary>
 public sealed class ClassifyConsumer(
     ITaggingClient tagging,
     IVectorStore vectorStore,
     ISystemClock clock,
-    ILogger<ClassifyConsumer> logger) : IConsumer<ClassifyMessageRequest>
+    ILogger<ClassifyConsumer> logger) : IConsumer<ClassifyMessageRequested>
 {
-    public async Task Consume(ConsumeContext<ClassifyMessageRequest> context)
+    public async Task Consume(ConsumeContext<ClassifyMessageRequested> context)
     {
         var req = context.Message;
         var sw = Stopwatch.StartNew();
@@ -47,8 +51,9 @@ public sealed class ClassifyConsumer(
             "Classified {MessageSnowflake} in {ElapsedMs}ms — tags={TagCount} dims={Dims}",
             req.MessageSnowflake, sw.ElapsedMilliseconds, tagResult.TopicTags.Count, req.Embedding.Count);
 
-        await context.RespondAsync(new ClassifyMessageResponse
+        await context.Publish<MessageClassified>(new
         {
+            req.MessageSnowflake,
             Tags = tagResult.TopicTags,
             ClassifyModelVersion = tagging.Model,
             IndexedAt = indexedAt,

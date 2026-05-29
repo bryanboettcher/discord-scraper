@@ -1,4 +1,5 @@
 using DiscordScraper.Contracts.Configuration;
+using DiscordScraper.Contracts.Events.Message;
 using DiscordScraper.Contracts.Requests;
 using DiscordScraper.Enrichment.Consumers;
 using DiscordScraper.Enrichment.Ollama;
@@ -45,7 +46,7 @@ public sealed class TagConsumerTests
         await _provider.DisposeAsync();
     }
 
-    private static TagMessageRequest BuildRequest(
+    private static TagMessageRequested BuildRequest(
         long snowflake = 1L,
         string text = "some message text") => new()
     {
@@ -65,51 +66,43 @@ public sealed class TagConsumerTests
         _embedding.EmbedAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new ReadOnlyMemory<float>(expectedVector));
 
-        var client = _harness.GetRequestClient<TagMessageRequest>();
-        await client.GetResponse<TagMessageResponse>(BuildRequest(text: "hello world"));
+        await _harness.Bus.Publish(BuildRequest(text: "hello world"));
+
+        await _harness.GetConsumerHarness<TagConsumer>()
+            .Consumed.Any<TagMessageRequested>(x => x.Context.Message.PlainText == "hello world");
 
         await _embedding.Received(1).EmbedAsync("hello world", Arg.Any<CancellationToken>());
     }
 
     [Test]
-    public async Task Happy_path_response_contains_embedding_vector()
+    public async Task Happy_path_publishes_MessageTagged_with_embedding_vector()
     {
         var expectedVector = new float[768];
         expectedVector[3] = 0.42f;
         _embedding.EmbedAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new ReadOnlyMemory<float>(expectedVector));
 
-        var client = _harness.GetRequestClient<TagMessageRequest>();
-        var response = await client.GetResponse<TagMessageResponse>(BuildRequest());
+        await _harness.Bus.Publish(BuildRequest());
 
-        response.Message.Embedding.Count.ShouldBe(768);
-        response.Message.Embedding[3].ShouldBe(0.42f);
+        var published = await _harness.Published.SelectAsync<MessageTagged>().FirstOrDefaultAsync();
+        published.ShouldNotBeNull();
+        published.Context.Message.Embedding.Length.ShouldBe(768);
+        published.Context.Message.Embedding[3].ShouldBe(0.42f);
     }
 
     [Test]
-    public async Task Happy_path_response_EmbeddingModelVersion_matches_client_Model()
+    public async Task Happy_path_MessageTagged_EmbeddingModelVersion_matches_client_Model()
     {
         _embedding.EmbedAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new ReadOnlyMemory<float>(new float[768]));
 
-        var client = _harness.GetRequestClient<TagMessageRequest>();
-        var response = await client.GetResponse<TagMessageResponse>(BuildRequest());
+        await _harness.Bus.Publish(BuildRequest());
 
+        var published = await _harness.Published.SelectAsync<MessageTagged>().FirstOrDefaultAsync();
+        published.ShouldNotBeNull();
         // EmbeddingModelVersion is captured from embedding.Model so re-embed fans can
         // identify stale sagas whose stored model version no longer matches the current model.
-        response.Message.EmbeddingModelVersion.ShouldBe("nomic-embed-text:v1.5");
-    }
-
-    [Test]
-    public async Task Happy_path_response_GeneratedAt_is_not_null()
-    {
-        _embedding.EmbedAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(new ReadOnlyMemory<float>(new float[768]));
-
-        var client = _harness.GetRequestClient<TagMessageRequest>();
-        var response = await client.GetResponse<TagMessageResponse>(BuildRequest());
-
-        response.Message.GeneratedAt.ShouldNotBeNull();
+        published.Context.Message.EmbeddingModelVersion.ShouldBe("nomic-embed-text:v1.5");
     }
 
     // -------------------------------------------------------------------------
@@ -122,21 +115,23 @@ public sealed class TagConsumerTests
         _embedding.EmbedAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new ReadOnlyMemory<float>(new float[768]));
 
-        var client = _harness.GetRequestClient<TagMessageRequest>();
-        await client.GetResponse<TagMessageResponse>(new TagMessageRequest
+        await _harness.Bus.Publish(new TagMessageRequested
         {
             MessageSnowflake = 5L,
             PlainText = null!,
         });
+
+        await _harness.GetConsumerHarness<TagConsumer>()
+            .Consumed.Any<TagMessageRequested>();
 
         // Consumer coerces null to empty string — EmbedAsync receives "" not null.
         await _embedding.Received(1).EmbedAsync(string.Empty, Arg.Any<CancellationToken>());
     }
 
     // -------------------------------------------------------------------------
-    // Fault propagation — consumer lets HttpRequestException bubble so the
-    // TagConsumerDefinition retry policy handles it (saga sees Fault<> only after
-    // retry exhaustion).
+    // Fault propagation — consumer lets HttpRequestException bubble so MT
+    // auto-publishes Fault<TagMessageRequested>. TagConsumerDefinition retry
+    // policy handles transient failures; saga sees Fault<> only after exhaustion.
     // -------------------------------------------------------------------------
 
     [Test]
@@ -146,13 +141,13 @@ public sealed class TagConsumerTests
             .EmbedAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .ThrowsAsync(new HttpRequestException("simulated Ollama unavailable"));
 
-        var client = _harness.GetRequestClient<TagMessageRequest>();
-
-        Assert.ThrowsAsync<RequestFaultException>(
-            async () => await client.GetResponse<TagMessageResponse>(BuildRequest()));
+        await _harness.Bus.Publish(BuildRequest());
 
         var consumerHarness = _harness.GetConsumerHarness<TagConsumer>();
-        (await consumerHarness.Consumed.Any<TagMessageRequest>()).ShouldBeTrue();
+        (await consumerHarness.Consumed.Any<TagMessageRequested>()).ShouldBeTrue();
+
+        // No MessageTagged published — consumer faulted before completing.
+        (await _harness.Published.Any<MessageTagged>()).ShouldBeFalse();
     }
 
     // -------------------------------------------------------------------------
@@ -165,10 +160,9 @@ public sealed class TagConsumerTests
         _embedding.EmbedAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new ReadOnlyMemory<float>(new float[768]));
 
-        var client = _harness.GetRequestClient<TagMessageRequest>();
-        await client.GetResponse<TagMessageResponse>(BuildRequest(snowflake: 99L));
+        await _harness.Bus.Publish(BuildRequest(snowflake: 99L));
 
         var consumerHarness = _harness.GetConsumerHarness<TagConsumer>();
-        (await consumerHarness.Consumed.Any<TagMessageRequest>()).ShouldBeTrue();
+        (await consumerHarness.Consumed.Any<TagMessageRequested>()).ShouldBeTrue();
     }
 }

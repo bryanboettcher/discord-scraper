@@ -30,14 +30,14 @@ internal static class MessageSagaStateExtensions
             PayloadJson = s.PayloadJson,
         };
 
-    public static TagMessageRequest ToTagRequest(this MessageSagaState s) =>
+    public static TagMessageRequested ToTagMessageRequested(this MessageSagaState s) =>
         new()
         {
             MessageSnowflake = s.MessageSnowflake,
             PlainText = IrTextFlattener.Flatten(s.IR!),
         };
 
-    public static ClassifyMessageRequest ToClassifyRequest(this MessageSagaState s) =>
+    public static ClassifyMessageRequested ToClassifyMessageRequested(this MessageSagaState s) =>
         new()
         {
             MessageSnowflake = s.MessageSnowflake,
@@ -78,20 +78,6 @@ internal static class MessageSagaStateExtensions
             ctx.Saga.CurrentState,
             UpdatedOn = ctx.Saga.UpdatedOn,
             ctx.Saga.IR,
-        });
-
-    public static Task<SendTuple<MessageTagged>> ToMessageTagged(this BehaviorContext<MessageSagaState> ctx) =>
-        ctx.Init<MessageTagged>(new
-        {
-            ctx.Saga.MessageId,
-            ctx.Saga.MessageSnowflake,
-            ctx.Saga.ChannelId,
-            ctx.Saga.GuildId,
-            ctx.Saga.AuthorId,
-            ctx.Saga.CurrentState,
-            UpdatedOn = ctx.Saga.UpdatedOn,
-            Embedding = ctx.Saga.Embedding!,
-            EmbeddingModelVersion = ctx.Saga.EmbeddingModelVersion!,
         });
 
     public static Task<SendTuple<MessageEnriched>> ToMessageEnriched(this BehaviorContext<MessageSagaState> ctx) =>

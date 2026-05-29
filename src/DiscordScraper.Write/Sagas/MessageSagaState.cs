@@ -97,8 +97,6 @@ public sealed class MessageSagaState : SagaStateMachineInstance, ISagaVersion, I
     // --- Request correlation IDs (MT requires Guid? per Request declaration) ---
     public Guid? AnalyzeMessageRequestId { get; set; }
     public Guid? ProjectMessageRequestId { get; set; }
-    public Guid? TagRequestId { get; set; }
-    public Guid? ClassifyRequestId { get; set; }
 
     /// <summary>
     /// UTC creation time decoded from the snowflake on capture. Forwarded to

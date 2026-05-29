@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using DiscordScraper.Contracts.Events.Message;
 using DiscordScraper.Contracts.Requests;
 using DiscordScraper.Enrichment.Ollama;
 using MassTransit;
@@ -7,15 +8,18 @@ using Microsoft.Extensions.Logging;
 namespace DiscordScraper.Enrichment.Consumers;
 
 /// <summary>
-/// Tag phase: produces an embedding vector via nomic-embed-text.
-/// Sequential with Classify — the saga fires ClassifyRequest only after this completes,
-/// preventing concurrent GPU load that caused 286 timeouts with the old parallel Task.WhenAll.
+/// Tag phase: produces an embedding vector via nomic-embed-text and publishes MessageTagged.
+/// Sequential with Classify — the saga publishes ClassifyMessageRequested only after
+/// MessageTagged arrives, preventing concurrent GPU load.
+///
+/// No try/catch — exceptions propagate and MT auto-publishes Fault&lt;TagMessageRequested&gt;,
+/// which the saga subscribes to for fault handling and replay.
 /// </summary>
 public sealed class TagConsumer(
     IEmbeddingClient embedding,
-    ILogger<TagConsumer> logger) : IConsumer<TagMessageRequest>
+    ILogger<TagConsumer> logger) : IConsumer<TagMessageRequested>
 {
-    public async Task Consume(ConsumeContext<TagMessageRequest> context)
+    public async Task Consume(ConsumeContext<TagMessageRequested> context)
     {
         var req = context.Message;
         var sw = Stopwatch.StartNew();
@@ -29,11 +33,11 @@ public sealed class TagConsumer(
             "Tagged {MessageSnowflake} in {ElapsedMs}ms — dims={Dims}",
             req.MessageSnowflake, sw.ElapsedMilliseconds, vector.Length);
 
-        await context.RespondAsync(new TagMessageResponse
+        await context.Publish<MessageTagged>(new
         {
+            req.MessageSnowflake,
             Embedding = vector.ToArray(),
             EmbeddingModelVersion = embedding.Model,
-            GeneratedAt = DateTimeOffset.UtcNow,
         });
     }
 }

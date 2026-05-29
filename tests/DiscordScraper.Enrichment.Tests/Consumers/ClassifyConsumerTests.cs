@@ -1,5 +1,6 @@
 using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Contracts.Configuration;
+using DiscordScraper.Contracts.Events.Message;
 using DiscordScraper.Contracts.Requests;
 using DiscordScraper.Core.Vector;
 using DiscordScraper.Enrichment.Consumers;
@@ -59,7 +60,7 @@ public sealed class ClassifyConsumerTests
         await _provider.DisposeAsync();
     }
 
-    private static ClassifyMessageRequest BuildRequest(
+    private static ClassifyMessageRequested BuildRequest(
         long snowflake = 1L,
         long guildId = 10L,
         long channelId = 20L,
@@ -86,48 +87,53 @@ public sealed class ClassifyConsumerTests
         _tagging.TagAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new TagResult(["dotnet", "postgres"], IsSubstantive: true));
 
-        var client = _harness.GetRequestClient<ClassifyMessageRequest>();
-        await client.GetResponse<ClassifyMessageResponse>(BuildRequest(text: "dotnet rocks"));
+        await _harness.Bus.Publish(BuildRequest(text: "dotnet rocks"));
+
+        await _harness.GetConsumerHarness<ClassifyConsumer>()
+            .Consumed.Any<ClassifyMessageRequested>(x => x.Context.Message.PlainText == "dotnet rocks");
 
         await _tagging.Received(1).TagAsync("dotnet rocks", Arg.Any<CancellationToken>());
     }
 
     [Test]
-    public async Task Happy_path_response_Tags_match_TagResult()
+    public async Task Happy_path_publishes_MessageClassified_with_Tags_from_TagResult()
     {
         _tagging.TagAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new TagResult(["dotnet", "postgres"], IsSubstantive: true));
 
-        var client = _harness.GetRequestClient<ClassifyMessageRequest>();
-        var response = await client.GetResponse<ClassifyMessageResponse>(BuildRequest());
+        await _harness.Bus.Publish(BuildRequest());
 
-        response.Message.Tags.ShouldBe(["dotnet", "postgres"]);
+        var published = await _harness.Published.SelectAsync<MessageClassified>().FirstOrDefaultAsync();
+        published.ShouldNotBeNull();
+        published.Context.Message.Tags.ShouldBe(["dotnet", "postgres"]);
     }
 
     [Test]
-    public async Task Happy_path_response_ClassifyModelVersion_matches_client_Model()
+    public async Task Happy_path_MessageClassified_ClassifyModelVersion_matches_client_Model()
     {
         _tagging.TagAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new TagResult(["ai"], IsSubstantive: true));
 
-        var client = _harness.GetRequestClient<ClassifyMessageRequest>();
-        var response = await client.GetResponse<ClassifyMessageResponse>(BuildRequest());
+        await _harness.Bus.Publish(BuildRequest());
 
+        var published = await _harness.Published.SelectAsync<MessageClassified>().FirstOrDefaultAsync();
+        published.ShouldNotBeNull();
         // ClassifyModelVersion is captured from tagging.Model so the ClassificationInvalidated
         // fan-out can identify sagas whose stored version no longer matches.
-        response.Message.ClassifyModelVersion.ShouldBe("llama3.1:8b");
+        published.Context.Message.ClassifyModelVersion.ShouldBe("llama3.1:8b");
     }
 
     [Test]
-    public async Task Happy_path_response_IndexedAt_is_set_to_clock_UtcNow()
+    public async Task Happy_path_MessageClassified_IndexedAt_is_set_to_clock_UtcNow()
     {
         _tagging.TagAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new TagResult(["ai"], IsSubstantive: true));
 
-        var client = _harness.GetRequestClient<ClassifyMessageRequest>();
-        var response = await client.GetResponse<ClassifyMessageResponse>(BuildRequest());
+        await _harness.Bus.Publish(BuildRequest());
 
-        response.Message.IndexedAt.ShouldBe(FixedNow);
+        var published = await _harness.Published.SelectAsync<MessageClassified>().FirstOrDefaultAsync();
+        published.ShouldNotBeNull();
+        published.Context.Message.IndexedAt.ShouldBe(FixedNow);
     }
 
     [Test]
@@ -141,8 +147,9 @@ public sealed class ClassifyConsumerTests
             Arg.Do<IReadOnlyList<VectorPoint>>(pts => captured = pts),
             Arg.Any<CancellationToken>());
 
-        var client = _harness.GetRequestClient<ClassifyMessageRequest>();
-        await client.GetResponse<ClassifyMessageResponse>(BuildRequest(snowflake: 42L));
+        await _harness.Bus.Publish(BuildRequest(snowflake: 42L));
+
+        await _harness.GetConsumerHarness<ClassifyConsumer>().Consumed.Any<ClassifyMessageRequested>();
 
         captured.ShouldNotBeNull();
         captured![0].MessageId.ShouldBe(42L);
@@ -162,8 +169,9 @@ public sealed class ClassifyConsumerTests
             Arg.Do<IReadOnlyList<VectorPoint>>(pts => captured = pts),
             Arg.Any<CancellationToken>());
 
-        var client = _harness.GetRequestClient<ClassifyMessageRequest>();
-        await client.GetResponse<ClassifyMessageResponse>(BuildRequest(embedding: embedding));
+        await _harness.Bus.Publish(BuildRequest(embedding: embedding));
+
+        await _harness.GetConsumerHarness<ClassifyConsumer>().Consumed.Any<ClassifyMessageRequested>();
 
         captured.ShouldNotBeNull();
         captured![0].Embedding.Span[7].ShouldBe(0.99f);
@@ -180,8 +188,9 @@ public sealed class ClassifyConsumerTests
             Arg.Do<IReadOnlyList<VectorPoint>>(pts => captured = pts),
             Arg.Any<CancellationToken>());
 
-        var client = _harness.GetRequestClient<ClassifyMessageRequest>();
-        await client.GetResponse<ClassifyMessageResponse>(BuildRequest());
+        await _harness.Bus.Publish(BuildRequest());
+
+        await _harness.GetConsumerHarness<ClassifyConsumer>().Consumed.Any<ClassifyMessageRequested>();
 
         captured.ShouldNotBeNull();
         captured![0].Tags.ShouldBe(["databases", "nosql"]);
@@ -192,7 +201,7 @@ public sealed class ClassifyConsumerTests
     // -------------------------------------------------------------------------
 
     [Test]
-    public async Task Empty_tags_from_TagResult_are_forwarded_to_vector_point()
+    public async Task Empty_tags_from_TagResult_are_forwarded_to_vector_point_and_MessageClassified()
     {
         _tagging.TagAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new TagResult([], IsSubstantive: false));
@@ -202,12 +211,14 @@ public sealed class ClassifyConsumerTests
             Arg.Do<IReadOnlyList<VectorPoint>>(pts => captured = pts),
             Arg.Any<CancellationToken>());
 
-        var client = _harness.GetRequestClient<ClassifyMessageRequest>();
-        var response = await client.GetResponse<ClassifyMessageResponse>(BuildRequest());
+        await _harness.Bus.Publish(BuildRequest());
+
+        var published = await _harness.Published.SelectAsync<MessageClassified>().FirstOrDefaultAsync();
+        published.ShouldNotBeNull();
 
         captured.ShouldNotBeNull();
         captured![0].Tags.ShouldBeEmpty();
-        response.Message.Tags.ShouldBeEmpty();
+        published.Context.Message.Tags.ShouldBeEmpty();
     }
 
     // -------------------------------------------------------------------------
@@ -222,17 +233,17 @@ public sealed class ClassifyConsumerTests
             .TagAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .ThrowsAsync(new HttpRequestException("simulated LLM unavailable"));
 
-        var client = _harness.GetRequestClient<ClassifyMessageRequest>();
-
-        Assert.ThrowsAsync<RequestFaultException>(
-            async () => await client.GetResponse<ClassifyMessageResponse>(BuildRequest()));
+        await _harness.Bus.Publish(BuildRequest());
 
         var consumerHarness = _harness.GetConsumerHarness<ClassifyConsumer>();
-        (await consumerHarness.Consumed.Any<ClassifyMessageRequest>()).ShouldBeTrue();
+        (await consumerHarness.Consumed.Any<ClassifyMessageRequested>()).ShouldBeTrue();
+
+        // No MessageClassified published — consumer faulted before completing.
+        (await _harness.Published.Any<MessageClassified>()).ShouldBeFalse();
     }
 
     [Test]
-    public async Task VectorStore_exception_faults_the_consumer_before_responding()
+    public async Task VectorStore_exception_faults_the_consumer_before_publishing()
     {
         _tagging.TagAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new TagResult(["dotnet"], IsSubstantive: true));
@@ -240,10 +251,13 @@ public sealed class ClassifyConsumerTests
             .UpsertManyAsync(Arg.Any<IReadOnlyList<VectorPoint>>(), Arg.Any<CancellationToken>())
             .ThrowsAsync(new InvalidOperationException("simulated Postgres connection reset"));
 
-        var client = _harness.GetRequestClient<ClassifyMessageRequest>();
+        await _harness.Bus.Publish(BuildRequest());
 
-        Assert.ThrowsAsync<RequestFaultException>(
-            async () => await client.GetResponse<ClassifyMessageResponse>(BuildRequest()));
+        var consumerHarness = _harness.GetConsumerHarness<ClassifyConsumer>();
+        (await consumerHarness.Consumed.Any<ClassifyMessageRequested>()).ShouldBeTrue();
+
+        // No MessageClassified published — consumer faulted before completing.
+        (await _harness.Published.Any<MessageClassified>()).ShouldBeFalse();
     }
 
     // -------------------------------------------------------------------------
@@ -256,10 +270,9 @@ public sealed class ClassifyConsumerTests
         _tagging.TagAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new TagResult(["dotnet"], IsSubstantive: true));
 
-        var client = _harness.GetRequestClient<ClassifyMessageRequest>();
-        await client.GetResponse<ClassifyMessageResponse>(BuildRequest(snowflake: 99L));
+        await _harness.Bus.Publish(BuildRequest(snowflake: 99L));
 
         var consumerHarness = _harness.GetConsumerHarness<ClassifyConsumer>();
-        (await consumerHarness.Consumed.Any<ClassifyMessageRequest>()).ShouldBeTrue();
+        (await consumerHarness.Consumed.Any<ClassifyMessageRequested>()).ShouldBeTrue();
     }
 }

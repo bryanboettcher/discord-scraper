@@ -4,14 +4,12 @@
 #pragma warning disable CS8618, CS9264, CS8602, CS8601
 
 using DiscordScraper.Contracts;
-using DiscordScraper.Contracts.Configuration;
 using DiscordScraper.Contracts.Events.Message;
 using DiscordScraper.Contracts.Events.Sync;
 using DiscordScraper.Contracts.IR;
 using DiscordScraper.Contracts.Requests;
 using MassTransit;
 using MassTransit.Contracts;
-using Microsoft.Extensions.Options;
 
 namespace DiscordScraper.Write.Sagas;
 
@@ -19,16 +17,18 @@ namespace DiscordScraper.Write.Sagas;
 /// Orchestrates the message lifecycle:
 /// Analyze → Project → Tagging → Classifying → Enriched.
 ///
-/// Tag and Classify are sequential, saga-driven phases replacing the old parallel
-/// Task.WhenAll EnhanceMessage that caused GPU thrashing on a shared Vulkan card.
+/// Tag and Classify are sequential, saga-driven phases. Analyze and Project use
+/// Request&lt;&gt;/Response&lt;&gt; (fast, CPU-bound). Tag (embedding) and Classify (LLM) use
+/// event-driven Publish/Subscribe so the saga waits indefinitely; the consumer's
+/// HttpClient timeout is the operational deadline. Consumer exceptions auto-publish
+/// Fault&lt;T&gt; which the saga subscribes to for fault handling and replay.
 ///
 /// Edits arriving while a request is in flight are queued via HasPendingEdit and re-loop
 /// through ProjectMessage on the next *.Completed handler. Edits in the Enriched terminal
 /// state trigger an immediate re-loop.
 ///
 /// Replay: Faulted sagas receive MessageReplayRequested and re-enter Tagging or Classifying
-/// based on which phase produced no results. ClearRequestIdOnFaulted is required so stale
-/// RequestIds don't break correlation when re-firing from Faulted.
+/// based on which phase produced no results.
 /// </summary>
 public sealed class MessageSagaStateMachine : MassTransitStateMachine<MessageSagaState>
 {
@@ -37,8 +37,6 @@ public sealed class MessageSagaStateMachine : MassTransitStateMachine<MessageSag
     private const long DiscordEpochMs = 1420070400000L;
 
     private readonly TimeSpan _requestTimeout;
-    private readonly TimeSpan _tagTimeout;
-    private readonly TimeSpan _classifyTimeout;
 
     public State Excluded { get; }
     public State Faulted { get; }
@@ -55,20 +53,19 @@ public sealed class MessageSagaStateMachine : MassTransitStateMachine<MessageSag
     public Event<TagsInvalidated> TagsInvalidated { get; }
     public Event<ClassificationInvalidated> ClassificationInvalidated { get; }
 
+    // Tag and Classify phases — event-driven; no Request<> timeout.
+    public Event<MessageTagged> Tagged { get; }
+    public Event<MessageClassified> Classified { get; }
+    public Event<Fault<TagMessageRequested>> TagFault { get; }
+    public Event<Fault<ClassifyMessageRequested>> ClassifyFault { get; }
+
     public Request<MessageSagaState, AnalyzeMessageRequest, AnalyzeMessageResponse> AnalyzeMessage { get; }
     public Request<MessageSagaState, ProjectMessageRequest, ProjectMessageResponse> ProjectMessage { get; }
-    public Request<MessageSagaState, TagMessageRequest, TagMessageResponse> TagRequest { get; }
-    public Request<MessageSagaState, ClassifyMessageRequest, ClassifyMessageResponse> ClassifyRequest { get; }
 
     /// <param name="requestTimeout">Override all request timeouts. Tests only; production resolves IOptions from DI.</param>
-    public MessageSagaStateMachine(
-        IOptions<EnrichmentTagOptions>? tagOptions = null,
-        IOptions<EnrichmentClassifyOptions>? classifyOptions = null,
-        TimeSpan? requestTimeout = null)
+    public MessageSagaStateMachine(TimeSpan? requestTimeout = null)
     {
         _requestTimeout = requestTimeout ?? TimeSpan.FromSeconds(30);
-        _tagTimeout = requestTimeout ?? tagOptions?.Value.RequestTimeout ?? TimeSpan.FromSeconds(30);
-        _classifyTimeout = requestTimeout ?? classifyOptions?.Value.RequestTimeout ?? TimeSpan.FromSeconds(180);
 
         InstanceState(x => x.CurrentState);
 
@@ -111,11 +108,11 @@ public sealed class MessageSagaStateMachine : MassTransitStateMachine<MessageSag
         // Fan-out for re-tagging under a new embedding model. Re-runs both Tag (embedding)
         // and Classify so downstream vector points and LLM tags stay consistent.
         //
-        // Cutoff is compared to saga.IndexedAt (stamped from ClassifyMessageResponse.IndexedAt)
+        // Cutoff is compared to saga.IndexedAt (stamped from MessageClassified.IndexedAt)
         // rather than saga.UpdatedOn. UpdatedOn is the envelope-time tracking field stamped from
         // ctx.SentTime — not under test control, since MT does not expose a public hook to set
         // SentTime on outbound messages. IndexedAt is a contract-carried business timestamp from
-        // the classify response, so tests can drive deterministic cutoffs against it.
+        // the classify event, so tests can drive deterministic cutoffs against it.
         Event(() => TagsInvalidated, e =>
         {
             e.CorrelateBy((saga, ctx) =>
@@ -136,8 +133,31 @@ public sealed class MessageSagaStateMachine : MassTransitStateMachine<MessageSag
             e.OnMissingInstance(m => m.Discard());
         });
 
+        // Tagged and Classified are published by their respective consumers. Correlation is by
+        // DeterministicGuid.FromSnowflake so any node receiving a snowflake computes the same key.
+        Event(() => Tagged, e =>
+            e.CorrelateById(ctx => DeterministicGuid.FromSnowflake(ctx.Message.MessageSnowflake)));
+
+        Event(() => Classified, e =>
+            e.CorrelateById(ctx => DeterministicGuid.FromSnowflake(ctx.Message.MessageSnowflake)));
+
+        // Fault<T> outer Message is the Fault<T> envelope; inner Message is the original payload.
+        // OnMissingInstance.Discard: if the saga was already advanced or deleted before the fault
+        // arrived (race / duplicate), silently discard rather than creating a phantom instance.
+        Event(() => TagFault, e =>
+        {
+            e.CorrelateById(ctx => DeterministicGuid.FromSnowflake(ctx.Message.Message.MessageSnowflake));
+            e.OnMissingInstance(m => m.Discard());
+        });
+
+        Event(() => ClassifyFault, e =>
+        {
+            e.CorrelateById(ctx => DeterministicGuid.FromSnowflake(ctx.Message.Message.MessageSnowflake));
+            e.OnMissingInstance(m => m.Discard());
+        });
+
         // ---------------------------------------------------------------------
-        // Request registrations
+        // Request registrations (Analyze + Project only)
         // ---------------------------------------------------------------------
 
         Request(() => AnalyzeMessage, x => x.AnalyzeMessageRequestId, r =>
@@ -152,22 +172,6 @@ public sealed class MessageSagaStateMachine : MassTransitStateMachine<MessageSag
         Request(() => ProjectMessage, x => x.ProjectMessageRequestId, r =>
         {
             r.Timeout = _requestTimeout;
-            r.TimeoutExpired = cfg => cfg.OnMissingInstance(m => m.Discard());
-        });
-
-        Request(() => TagRequest, x => x.TagRequestId, r =>
-        {
-            r.Timeout = _tagTimeout;
-            // Required for replay: without this a Faulted saga retains the stale RequestId
-            // and the new TagRequest fires with a different Id, breaking response correlation.
-            r.ClearRequestIdOnFaulted = true;
-            r.TimeoutExpired = cfg => cfg.OnMissingInstance(m => m.Discard());
-        });
-
-        Request(() => ClassifyRequest, x => x.ClassifyRequestId, r =>
-        {
-            r.Timeout = _classifyTimeout;
-            r.ClearRequestIdOnFaulted = true;
             r.TimeoutExpired = cfg => cfg.OnMissingInstance(m => m.Discard());
         });
 
@@ -245,7 +249,7 @@ public sealed class MessageSagaStateMachine : MassTransitStateMachine<MessageSag
                     ctx.Saga.EmbeddingModelVersion = null;
                     ctx.Saga.IndexedAt = null;
                 })
-                .Request(TagRequest, ctx => ctx.Saga.ToTagRequest())
+                .Publish(ctx => ctx.Saga.ToTagMessageRequested())
                 .TransitionTo(Tagging),
 
             When(ProjectMessage.Faulted)
@@ -264,8 +268,8 @@ public sealed class MessageSagaStateMachine : MassTransitStateMachine<MessageSag
 
         // Tag phase = embedding (nomic-embed-text). On success: embedding vector stored, then Classify fires.
         During(Tagging,
-            // Unconditional: store embedding from response before branching.
-            When(TagRequest.Completed)
+            // Unconditional: store embedding from event before branching.
+            When(Tagged)
                 .Then(ctx =>
                 {
                     ctx.Saga.Embedding = ctx.Message.Embedding.ToArray();
@@ -273,7 +277,7 @@ public sealed class MessageSagaStateMachine : MassTransitStateMachine<MessageSag
                 }),
 
             // Edit arrived — discard embedding and re-project from latest content.
-            When(TagRequest.Completed, ctx => ctx.Saga.HasPendingEdit)
+            When(Tagged, ctx => ctx.Saga.HasPendingEdit)
                 .Then(ctx =>
                 {
                     ctx.Saga.HasPendingEdit = false;
@@ -283,21 +287,15 @@ public sealed class MessageSagaStateMachine : MassTransitStateMachine<MessageSag
                 .Request(ProjectMessage, ctx => ctx.Saga.ToProjectRequest())
                 .TransitionTo(ProjectMessage.Pending),
 
-            // No pending edit: publish phase event and advance to Classifying.
-            When(TagRequest.Completed, ctx => !ctx.Saga.HasPendingEdit)
-                .PublishAsync(ctx => ctx.ToMessageTagged())
-                .Request(ClassifyRequest, ctx => ctx.Saga.ToClassifyRequest())
+            // No pending edit: advance to Classifying.
+            When(Tagged, ctx => !ctx.Saga.HasPendingEdit)
+                .Publish(ctx => ctx.Saga.ToClassifyMessageRequested())
                 .TransitionTo(Classifying),
 
             // Tag failure → Faulted with no embedding stored.
-            When(TagRequest.Faulted)
+            When(TagFault)
                 .Then(SettleSaga)
                 .Then(LogFault)
-                .TransitionTo(Faulted),
-
-            When(TagRequest.TimeoutExpired)
-                .Then(SettleSaga)
-                .Then(LogTimeout)
                 .TransitionTo(Faulted));
 
         // ---------------------------------------------------------------------
@@ -306,8 +304,8 @@ public sealed class MessageSagaStateMachine : MassTransitStateMachine<MessageSag
 
         // Classify phase = LLM topic tagging + vector store indexing. On success: tags + IndexedAt stored.
         During(Classifying,
-            // Unconditional: store classify results from response before branching.
-            When(ClassifyRequest.Completed)
+            // Unconditional: store classify results from event before branching.
+            When(Classified)
                 .Then(ctx =>
                 {
                     ctx.Saga.Tags = ctx.Message.Tags;
@@ -316,7 +314,7 @@ public sealed class MessageSagaStateMachine : MassTransitStateMachine<MessageSag
                 }),
 
             // Edit arrived — discard all enrichment results and re-project from latest content.
-            When(ClassifyRequest.Completed, ctx => ctx.Saga.HasPendingEdit)
+            When(Classified, ctx => ctx.Saga.HasPendingEdit)
                 .Then(ctx =>
                 {
                     ctx.Saga.HasPendingEdit = false;
@@ -330,20 +328,15 @@ public sealed class MessageSagaStateMachine : MassTransitStateMachine<MessageSag
                 .TransitionTo(ProjectMessage.Pending),
 
             // No pending edit: publish enriched and settle.
-            When(ClassifyRequest.Completed, ctx => !ctx.Saga.HasPendingEdit)
+            When(Classified, ctx => !ctx.Saga.HasPendingEdit)
                 .PublishAsync(ctx => ctx.ToMessageEnriched())
                 .Then(SettleSaga)
                 .TransitionTo(Enriched),
 
             // Classify failure → Faulted with embedding preserved on saga state.
-            When(ClassifyRequest.Faulted)
+            When(ClassifyFault)
                 .Then(SettleSaga)
                 .Then(LogFault)
-                .TransitionTo(Faulted),
-
-            When(ClassifyRequest.TimeoutExpired)
-                .Then(SettleSaga)
-                .Then(LogTimeout)
                 .TransitionTo(Faulted));
 
         // ---------------------------------------------------------------------
@@ -364,11 +357,11 @@ public sealed class MessageSagaStateMachine : MassTransitStateMachine<MessageSag
                 .TransitionTo(ProjectMessage.Pending),
 
             When(TagsInvalidated)
-                .Request(TagRequest, ctx => ctx.Saga.ToTagRequest())
+                .Publish(ctx => ctx.Saga.ToTagMessageRequested())
                 .TransitionTo(Tagging),
 
             When(ClassificationInvalidated)
-                .Request(ClassifyRequest, ctx => ctx.Saga.ToClassifyRequest())
+                .Publish(ctx => ctx.Saga.ToClassifyMessageRequested())
                 .TransitionTo(Classifying));
 
         // ---------------------------------------------------------------------
@@ -399,23 +392,14 @@ public sealed class MessageSagaStateMachine : MassTransitStateMachine<MessageSag
         // Classify branch: saga has embedding but no tags — classify/LLM phase failed, embedding preserved.
         //
         // We key off saga state (Embedding/Tags) rather than RequestId nullability because
-        // ClearRequestIdOnFaulted on the Request<> declarations already nulls those — leaning on
-        // the actual phase output is the clearer invariant.
+        // Tag/Classify no longer use Request<> and have no request IDs on the saga.
         During(Faulted,
             When(MessageReplayRequested, ctx => ctx.Saga.Embedding == null)
-                .Then(ctx =>
-                {
-                    // ClearRequestIdOnFaulted already nulled these, but be explicit so replay
-                    // always starts with clean request correlation state.
-                    ctx.Saga.TagRequestId = null;
-                    ctx.Saga.ClassifyRequestId = null;
-                })
-                .Request(TagRequest, ctx => ctx.Saga.ToTagRequest())
+                .Publish(ctx => ctx.Saga.ToTagMessageRequested())
                 .TransitionTo(Tagging),
 
             When(MessageReplayRequested, ctx => ctx.Saga.Embedding != null && ctx.Saga.Tags == null)
-                .Then(ctx => ctx.Saga.ClassifyRequestId = null)
-                .Request(ClassifyRequest, ctx => ctx.Saga.ToClassifyRequest())
+                .Publish(ctx => ctx.Saga.ToClassifyMessageRequested())
                 .TransitionTo(Classifying));
 
         // ---------------------------------------------------------------------
@@ -457,16 +441,14 @@ public sealed class MessageSagaStateMachine : MassTransitStateMachine<MessageSag
             When(ProjectMessage.Completed).Then(UpdateSaga),
             When(ProjectMessage.Faulted).Then(UpdateSaga),
             When(ProjectMessage.TimeoutExpired).Then(UpdateSaga),
-            When(TagRequest.Completed).Then(UpdateSaga),
-            When(TagRequest.Faulted).Then(UpdateSaga),
-            When(TagRequest.TimeoutExpired).Then(UpdateSaga),
-            When(ClassifyRequest.Completed).Then(UpdateSaga),
-            When(ClassifyRequest.Faulted).Then(UpdateSaga),
-            When(ClassifyRequest.TimeoutExpired).Then(UpdateSaga));
+            When(Tagged).Then(UpdateSaga),
+            When(TagFault).Then(UpdateSaga),
+            When(Classified).Then(UpdateSaga),
+            When(ClassifyFault).Then(UpdateSaga));
     }
 
     // -------------------------------------------------------------------------
-    // Fault / timeout log helpers
+    // Fault log helpers
     // -------------------------------------------------------------------------
 
     private static void LogFault<TRequest>(BehaviorContext<MessageSagaState, Fault<TRequest>> ctx)
