@@ -70,6 +70,19 @@ public sealed class TestStack : IAsyncDisposable
     // Fixture envelopes to replay (populated via WithFixture)
     private IEnumerable<CaptureEnvelope>? _fixtureEnvelopes;
 
+    // When true: E2E tier starts Mongo as a single-node replica set and registers the Mongo outbox
+    // at the bus level — required to match the production MessageSagaDefinition which calls
+    // UseMongoDbOutbox(context). Without this the outbox middleware call in the definition
+    // throws because no IOutboxContextFactory is registered.
+    private bool _useOutbox;
+
+    // When true: replaces the real AnalyzeMessageConsumer with NeverRespondingAnalyzeConsumer
+    // so every saga times out on the Analyze phase — the precondition for reproducing #11.
+    private bool _useNeverRespondingAnalyze;
+
+    // When set: injected into the logging pipeline so callers can inspect captured log entries.
+    private CapturingLoggerProvider? _capturingLoggerProvider;
+
     // Connection info for containers (filled by StartContainersAsync)
     private string? _mongoConnectionString;
     private string? _rabbitConnectionString;
@@ -168,6 +181,53 @@ public sealed class TestStack : IAsyncDisposable
     public TestStack WithTaggingOutput(OutputGenerator<string, TagResult> output)
     {
         _taggingOutput = output;
+        return this;
+    }
+
+    /// <summary>
+    /// E2E tier only. Starts Mongo as a single-node replica set and registers
+    /// <c>AddMongoDbOutbox</c> at the bus level so that <see cref="MessageSagaDefinition"/>'s
+    /// <c>UseMongoDbOutbox(context)</c> call resolves correctly. Required to reproduce #11
+    /// because the outbox is active in production and changes the saga-consume pipeline ordering.
+    /// </summary>
+    public TestStack WithMongoOutbox()
+    {
+        _useOutbox = true;
+        return this;
+    }
+
+    /// <summary>
+    /// Injects a <see cref="CapturingLoggerProvider"/> into the logging pipeline.
+    /// Access via <see cref="GetCapturingLogger"/> after <see cref="StartAsync"/> to inspect
+    /// captured log entries, including Mongo E11000 duplicate-key errors from the saga repository.
+    /// </summary>
+    public TestStack WithCapturingLogger()
+    {
+        _capturingLoggerProvider = new CapturingLoggerProvider();
+        return this;
+    }
+
+    /// <summary>
+    /// Returns the capturing logger provider registered via <see cref="WithCapturingLogger"/>.
+    /// Available after <see cref="StartAsync"/>.
+    /// </summary>
+    public CapturingLoggerProvider GetCapturingLogger()
+    {
+        if (_capturingLoggerProvider is null)
+            throw new InvalidOperationException("Call WithCapturingLogger() before StartAsync().");
+        return _capturingLoggerProvider;
+    }
+
+    /// <summary>
+    /// Replaces <c>AnalyzeMessageConsumer</c> with <see cref="NeverRespondingAnalyzeConsumer"/>,
+    /// which accepts every <c>AnalyzeMessageRequest</c> but never sends a response. Every saga
+    /// remains in <c>AnalyzeMessage.Pending</c> until the configured request timeout fires.
+    /// Use with a short <see cref="WithRequestTimeout"/> to drive a burst of
+    /// <c>RequestTimeoutExpired&lt;AnalyzeMessageRequest&gt;</c> events.
+    /// </summary>
+    public TestStack WithNeverRespondingAnalyze()
+    {
+        _useNeverRespondingAnalyze = true;
         return this;
     }
 
@@ -307,8 +367,17 @@ public sealed class TestStack : IAsyncDisposable
 
             case TestStackTier.E2E:
             {
-                var mongo = new MongoDbBuilder().Build();
-                var rabbit = new RabbitMqBuilder().Build();
+                // Outbox requires a replica set because Mongo transactions (used internally
+                // by MassTransit's Mongo outbox for atomic saga + outbox writes) require
+                // a replica set — standalone Mongo does not support multi-document transactions.
+                var mongoBuilder = _useOutbox
+                    ? new MongoDbBuilder().WithReplicaSet("rs0")
+                    : new MongoDbBuilder();
+                var mongo = mongoBuilder.Build();
+                // masstransit/rabbitmq includes rabbitmq_delayed_message_exchange, which is required
+                // for UseDelayedMessageScheduler() used by the saga request-timeout pipeline.
+                // The default Testcontainers RabbitMQ image does not include this plugin.
+                var rabbit = new RabbitMqBuilder().WithImage("masstransit/rabbitmq:latest").Build();
                 var postgres = new PostgreSqlBuilder().Build();
                 _containers.Add(mongo);
                 _containers.Add(rabbit);
@@ -317,7 +386,18 @@ public sealed class TestStack : IAsyncDisposable
                     mongo.StartAsync(ct),
                     rabbit.StartAsync(ct),
                     postgres.StartAsync(ct));
-                _mongoConnectionString = mongo.GetConnectionString();
+                // Replica set containers advertise their internal 127.0.0.1:27017 address
+                // after initiation. The MongoDB client follows that topology advertisement and
+                // tries to connect to the internal address, bypassing the mapped port.
+                // directConnection=true forces the client to use the mapped endpoint directly.
+                // replicaSet=rs0 is required alongside directConnection=true so the driver
+                // treats the node as a replica set member, enabling session-based transactions
+                // (which the Mongo outbox requires). Without replicaSet=, directConnection
+                // implies standalone mode and StartSession/BeginTransaction fail.
+                var rawConn = mongo.GetConnectionString();
+                _mongoConnectionString = _useOutbox && !rawConn.Contains("directConnection")
+                    ? rawConn.TrimEnd('/') + "?directConnection=true&replicaSet=rs0"
+                    : rawConn;
                 _rabbitConnectionString = rabbit.GetConnectionString();
                 // Postgres connection string stored for future use by callers
                 // (pgvector setup beyond TestStack scope — see E2E XML comment)
@@ -332,7 +412,15 @@ public sealed class TestStack : IAsyncDisposable
 
     private void ConfigureServices(IServiceCollection services)
     {
-        services.AddLogging(b => b.AddConsole().SetMinimumLevel(LogLevel.Warning));
+        services.AddLogging(b =>
+        {
+            // Debug for outbox/saga activity when investigating E11000 storm — reduce to Warning after fix
+            b.AddConsole().SetMinimumLevel(LogLevel.Debug)
+              .AddFilter("MassTransit", LogLevel.Information)
+              .AddFilter("Microsoft", LogLevel.Warning);
+            if (_capturingLoggerProvider is not null)
+                b.AddProvider(_capturingLoggerProvider);
+        });
 
         // Clock
         var clock = Substitute.For<ISystemClock>();
@@ -470,8 +558,23 @@ public sealed class TestStack : IAsyncDisposable
         // ITestHarness for InactivityTask / Consumed / Published queries.
         services.AddMassTransitTestHarness(cfg =>
         {
+            // Outbox bus-level registration must happen before endpoint configuration.
+            // MessageSagaDefinition.ConfigureSaga calls UseMongoDbOutbox(context), which
+            // requires IOutboxContextFactory to be resolvable at endpoint-configure time.
+            // Without this registration, UseMongoDbOutbox throws at bus start.
+            if (_useOutbox)
+            {
+                cfg.AddMongoDbOutbox(o =>
+                {
+                    o.QueryDelay = TimeSpan.FromMilliseconds(250);
+                    o.ClientFactory(sp => sp.GetRequiredService<IMongoClient>());
+                    o.DatabaseFactory(sp => sp.GetRequiredService<IMongoDatabase>());
+                    o.UseBusOutbox();
+                });
+            }
+
             RegisterSagaWithMongo(cfg);
-            RegisterEnrichmentConsumers(cfg);
+            RegisterEnrichmentConsumers(cfg, _useNeverRespondingAnalyze);
 
             cfg.UsingRabbitMq((ctx, rmq) =>
             {
@@ -479,6 +582,7 @@ public sealed class TestStack : IAsyncDisposable
                 rmq.UseSendFilter(typeof(OutboundTimestampFilter<>), ctx);
                 rmq.UsePublishFilter(typeof(OutboundTimestampFilter<>), ctx);
                 rmq.UseConsumeFilter(typeof(InboundTimestampFilter<>), ctx);
+                rmq.UseDelayedMessageScheduler();
                 rmq.ConfigureEndpoints(ctx);
             });
         });
@@ -505,11 +609,18 @@ public sealed class TestStack : IAsyncDisposable
            });
     }
 
-    private static void RegisterEnrichmentConsumers(IBusRegistrationConfigurator cfg)
+    private static void RegisterEnrichmentConsumers(
+        IBusRegistrationConfigurator cfg,
+        bool useNeverRespondingAnalyze = false)
     {
-        // Enrichment consumers — resolve stubs from DI for IEmbeddingClient / ITaggingClient
-        cfg.AddConsumer<Enrichment.Consumers.AnalyzeMessageConsumer,
-                        Enrichment.Consumers.AnalyzeMessageConsumerDefinition>();
+        // Analyze phase: real consumer or never-responding stub (for #11 timeout reproduction).
+        if (useNeverRespondingAnalyze)
+            cfg.AddConsumer<Stubs.NeverRespondingAnalyzeConsumer,
+                            Stubs.NeverRespondingAnalyzeConsumerDefinition>();
+        else
+            cfg.AddConsumer<Enrichment.Consumers.AnalyzeMessageConsumer,
+                            Enrichment.Consumers.AnalyzeMessageConsumerDefinition>();
+
         cfg.AddConsumer<Enrichment.Consumers.TagConsumer,
                         Enrichment.Consumers.TagConsumerDefinition>();
         cfg.AddConsumer<Enrichment.Consumers.ClassifyConsumer,
