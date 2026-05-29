@@ -65,6 +65,7 @@ public sealed class GuildSagaStateMachine : MassTransitStateMachine<GuildSagaSta
                     ctx.Saga.CorrelationId = DeterministicGuid.FromSnowflake(ctx.Message.GuildId);
                     ctx.Saga.IsPresent = true;
                 })
+                .Then(UpdateSaga)
                 .TransitionTo(Syncing));
 
         // Steady-state loop: explicit request or heartbeat pick-up while Synced re-enters Syncing.
@@ -86,8 +87,13 @@ public sealed class GuildSagaStateMachine : MassTransitStateMachine<GuildSagaSta
                 .TransitionTo(Synced));
 
         // Catch-all: every event bumps UpdatedOn and initialises CreatedOn once.
+        // Initial is excluded for the same reason as MessageSagaStateMachine: including Initial
+        // would make every event here initial-reachable, selecting NewOrExistingSagaPolicy on miss.
+        // Heartbeats (SyncHeartbeat) arriving with no matching saga would then try to insert a
+        // document and hit E11000. CreatedOn/UpdatedOn for the first SyncDue are stamped by the
+        // explicit .Then(UpdateSaga) in the Initially block above.
         During(
-            Initial, Syncing, Synced,
+            Syncing, Synced,
             When(SyncDue).Then(UpdateSaga),
             When(Changed).Then(UpdateSaga),
             When(Heartbeat).Then(UpdateSaga));

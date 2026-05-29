@@ -75,6 +75,7 @@ public sealed class ChannelSagaStateMachine : MassTransitStateMachine<ChannelSag
                     ctx.Saga.GuildId = ctx.Message.GuildId;
                     ctx.Saga.CorrelationId = DeterministicGuid.FromSnowflake(ctx.Message.ChannelId);
                 })
+                .Then(UpdateSaga)
                 .TransitionTo(Syncing));
 
         During(CaughtUp,
@@ -138,8 +139,13 @@ public sealed class ChannelSagaStateMachine : MassTransitStateMachine<ChannelSag
                 .TransitionTo(CaughtUp));
 
         // Catch-all: every event bumps UpdatedOn and initialises CreatedOn once.
+        // Initial is excluded for the same reason as MessageSagaStateMachine: including Initial
+        // would make every event here initial-reachable, selecting NewOrExistingSagaPolicy on miss.
+        // Scheduled events (e.g. PinPollDue) that arrive after a saga is gone would then try to
+        // insert a duplicate document and hit E11000. CreatedOn/UpdatedOn for the first SyncDue
+        // are stamped by the explicit .Then(UpdateSaga) in the Initially block above.
         During(
-            Initial, Syncing, CaughtUp,
+            Syncing, CaughtUp,
             When(SyncDue).Then(UpdateSaga),
             When(SyncCompleted).Then(UpdateSaga),
             When(Changed).Then(UpdateSaga),

@@ -140,8 +140,20 @@ public sealed class MessageSagaStateMachine : MassTransitStateMachine<MessageSag
         // Request registrations
         // ---------------------------------------------------------------------
 
-        Request(() => AnalyzeMessage, x => x.AnalyzeMessageRequestId, r => r.Timeout = _requestTimeout);
-        Request(() => ProjectMessage, x => x.ProjectMessageRequestId, r => r.Timeout = _requestTimeout);
+        Request(() => AnalyzeMessage, x => x.AnalyzeMessageRequestId, r =>
+        {
+            r.Timeout = _requestTimeout;
+            // TimeoutExpired events arrive after MT has already completed/cleared the saga's
+            // RequestId — the ById correlation finds no instance. Without Discard the missing-
+            // instance policy falls back to NewOrExistingSaga (because Initial is initial-reachable
+            // via the catch-all), which tries InsertOneAsync and hits E11000 on the existing doc.
+            r.TimeoutExpired = cfg => cfg.OnMissingInstance(m => m.Discard());
+        });
+        Request(() => ProjectMessage, x => x.ProjectMessageRequestId, r =>
+        {
+            r.Timeout = _requestTimeout;
+            r.TimeoutExpired = cfg => cfg.OnMissingInstance(m => m.Discard());
+        });
 
         Request(() => TagRequest, x => x.TagRequestId, r =>
         {
@@ -149,12 +161,14 @@ public sealed class MessageSagaStateMachine : MassTransitStateMachine<MessageSag
             // Required for replay: without this a Faulted saga retains the stale RequestId
             // and the new TagRequest fires with a different Id, breaking response correlation.
             r.ClearRequestIdOnFaulted = true;
+            r.TimeoutExpired = cfg => cfg.OnMissingInstance(m => m.Discard());
         });
 
         Request(() => ClassifyRequest, x => x.ClassifyRequestId, r =>
         {
             r.Timeout = _classifyTimeout;
             r.ClearRequestIdOnFaulted = true;
+            r.TimeoutExpired = cfg => cfg.OnMissingInstance(m => m.Discard());
         });
 
         // ---------------------------------------------------------------------
@@ -164,6 +178,7 @@ public sealed class MessageSagaStateMachine : MassTransitStateMachine<MessageSag
         Initially(
             When(MessageCaptured)
                 .Then(ctx => CopyCaptureFields(ctx.Saga, ctx.Message))
+                .Then(UpdateSaga)
                 .Request(AnalyzeMessage, ctx => ctx.Saga.ToAnalyzeRequest())
                 .TransitionTo(AnalyzeMessage.Pending));
 
@@ -404,7 +419,7 @@ public sealed class MessageSagaStateMachine : MassTransitStateMachine<MessageSag
                 .TransitionTo(Classifying));
 
         // ---------------------------------------------------------------------
-        // Catch-all: bump UpdatedOn on every event in every state
+        // Catch-all: bump UpdatedOn on every event in every non-Initial state
         // ---------------------------------------------------------------------
 
         // MassTransit runs every matching During() block — both the state-specific handler and
@@ -413,9 +428,20 @@ public sealed class MessageSagaStateMachine : MassTransitStateMachine<MessageSag
         // is registration order: this catch-all runs after the specific handler, which means
         // state-specific publishes see the prior event's UpdatedOn — fine since UpdateSaga
         // already ran on the previous event before this transition began.
+        //
+        // Initial is deliberately excluded. MT's MessageEventCorrelation._includesInitial check
+        // selects NewOrExistingSagaPolicy for any event whose During() registration is reachable
+        // from the Initial state. That policy calls MissingSagaPipe.Save → InsertOneAsync when
+        // no instance is found. For timeout events (RequestTimeoutExpired<T>) that arrive after
+        // the saga has already been completed and its RequestId field cleared, the ById query
+        // returns nothing; the policy then tries to insert, hitting E11000 because the document
+        // still exists at that _id (sagas are not deleted on completion, only transitioned).
+        // Keeping Initial out of allStates means these events use the default DiscardPolicy on
+        // miss instead. CreatedOn/UpdatedOn for the very first MessageCaptured are stamped by
+        // the explicit .Then(UpdateSaga) in the Initially block above.
         State[] allStates =
         [
-            Initial, AnalyzeMessage.Pending, ProjectMessage.Pending, Tagging, Classifying,
+            AnalyzeMessage.Pending, ProjectMessage.Pending, Tagging, Classifying,
             Enriched, Excluded, Faulted,
         ];
 
@@ -494,7 +520,7 @@ public sealed class MessageSagaStateMachine : MassTransitStateMachine<MessageSag
         saga.AuthorIsBot = msg.AuthorIsBot;
         saga.PayloadJson = msg.PayloadJson;
         saga.MessageCreatedAt = DecodeCreatedAt(msg.MessageSnowflake);
-        // CreatedOn/UpdatedOn are set by the catch-all UpdateSaga after this factory runs.
+        // CreatedOn/UpdatedOn are stamped by the explicit .Then(UpdateSaga) in the Initially block.
     }
 
     private static DateTimeOffset DecodeCreatedAt(long snowflake) =>
