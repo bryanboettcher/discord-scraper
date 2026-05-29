@@ -55,19 +55,28 @@ public static class MongoBsonRegistration
         // BSON would otherwise complain about an unmapped `_id` element because AutoMap binds
         // CorrelationId to a "CorrelationId" field. Explicit MapIdMember tells the driver to bind
         // CorrelationId to `_id` on both directions.
+        //
+        // SetIgnoreExtraElements(true) on every saga class map: saga schema evolves (fields
+        // added/removed) between deployments, and existing Mongo docs may contain fields the
+        // current class no longer declares. Without this, deserialization throws
+        // FormatException("Element 'X' does not match any field...") and the consume faults,
+        // blocking the saga entirely until the old fields are scrubbed from Mongo.
         BsonClassMap.TryRegisterClassMap<GuildSagaState>(cm =>
         {
             cm.AutoMap();
+            cm.SetIgnoreExtraElements(true);
             cm.MapIdMember(s => s.CorrelationId);
         });
         BsonClassMap.TryRegisterClassMap<ChannelSagaState>(cm =>
         {
             cm.AutoMap();
+            cm.SetIgnoreExtraElements(true);
             cm.MapIdMember(s => s.CorrelationId);
         });
         BsonClassMap.TryRegisterClassMap<MessageSagaState>(cm =>
         {
             cm.AutoMap();
+            cm.SetIgnoreExtraElements(true);
             cm.MapIdMember(s => s.CorrelationId);
         });
     }
