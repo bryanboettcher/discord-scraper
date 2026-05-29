@@ -1,5 +1,4 @@
 using DiscordScraper.Contracts;
-using DiscordScraper.Contracts.Clock;
 using MassTransit;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -76,7 +75,7 @@ public sealed class ObservationBuilder(IServiceCollection services)
         services.AddSingleton<QueueDwellObserver>(sp =>
             new QueueDwellObserver(
                 sp.GetRequiredService<ITestObservationSink>(),
-                sp.GetRequiredService<ISystemClock>()));
+                sp.GetRequiredService<TimeProvider>()));
         return this;
     }
 }

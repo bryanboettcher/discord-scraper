@@ -1,5 +1,4 @@
 using System.Text.Json;
-using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Contracts.Configuration;
 using Microsoft.Extensions.Options;
 
@@ -11,7 +10,7 @@ namespace DiscordScraper.Write.Consumers;
 /// <see cref="MessageCaptureConsumer"/> instances (one per <c>IConsumer&lt;T&gt;</c> binding
 /// that MT creates per receive) share the same file handle and write exactly one header.
 /// </summary>
-public sealed class CaptureWriter(IOptions<CaptureOptions> options, ISystemClock clock)
+public sealed class CaptureWriter(IOptions<CaptureOptions> options, TimeProvider clock)
 {
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -45,7 +44,7 @@ public sealed class CaptureWriter(IOptions<CaptureOptions> options, ISystemClock
                 {
                     kind = "header",
                     schemaVersion = CaptureSchemaVersion.Current,
-                    capturedAt = clock.UtcNow,
+                    capturedAt = clock.GetUtcNow(),
                     sourceGuild = guildId.ToString(),
                     scraperSha = _scraperSha,
                 };
@@ -68,7 +67,7 @@ public sealed class CaptureWriter(IOptions<CaptureOptions> options, ISystemClock
             return _filePath;
 
         Directory.CreateDirectory(_options.OutputPath);
-        var timestamp = clock.UtcNow.ToString("yyyyMMddTHHmmss");
+        var timestamp = clock.GetUtcNow().ToString("yyyyMMddTHHmmss");
         _filePath = Path.Combine(_options.OutputPath, $"{guildId}_{timestamp}.jsonl");
         return _filePath;
     }

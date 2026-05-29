@@ -1,7 +1,6 @@
 using System.Globalization;
 using System.Net;
 using System.Text.Json;
-using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Contracts.Events.Channel;
 using DiscordScraper.Contracts.Events.Guild;
 using DiscordScraper.Discord;
@@ -22,7 +21,7 @@ namespace DiscordScraper.Write.Consumers;
 public sealed class GuildSyncConsumer(
     IDiscordClient discord,
     IChannelCursorRepo cursorRepo,
-    ISystemClock clock,
+    TimeProvider clock,
     ILogger<GuildSyncConsumer> logger) : IConsumer<GuildSyncDue>
 {
     // Discord channel types we treat as message-bearing for v1.
@@ -52,8 +51,8 @@ public sealed class GuildSyncConsumer(
                 Roles = Array.Empty<GuildRole>(),
                 IsPresent = false,
                 CurrentState = "Inaccessible",
-                UpdatedOn = clock.UtcNow,
-                SyncedAt = (DateTimeOffset?)clock.UtcNow,
+                UpdatedOn = clock.GetUtcNow(),
+                SyncedAt = (DateTimeOffset?)clock.GetUtcNow(),
             }, ct);
         }
     }
@@ -78,7 +77,7 @@ public sealed class GuildSyncConsumer(
         var channelIds = allChannels.Select(c => c.ChannelId).ToList();
         var cursors = await cursorRepo.GetCursorsAsync(channelIds, ct);
 
-        var now = clock.UtcNow;
+        var now = clock.GetUtcNow();
         foreach (var channel in allChannels)
         {
             var cursor = cursors.TryGetValue(channel.ChannelId, out var c) ? c : 0L;

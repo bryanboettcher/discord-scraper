@@ -1,5 +1,5 @@
-using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Contracts.Configuration;
+using Microsoft.Extensions.Time.Testing;
 using DiscordScraper.Contracts.Events.Message;
 using DiscordScraper.Contracts.Requests;
 using DiscordScraper.Core.Vector;
@@ -19,7 +19,7 @@ public sealed class ClassifyConsumerTests
 {
     private ITaggingClient _tagging = null!;
     private IVectorStore _vectorStore = null!;
-    private ISystemClock _clock = null!;
+    private FakeTimeProvider _clock = null!;
     private ServiceProvider _provider = null!;
     private ITestHarness _harness = null!;
 
@@ -34,13 +34,13 @@ public sealed class ClassifyConsumerTests
 
         _vectorStore = Substitute.For<IVectorStore>();
 
-        _clock = Substitute.For<ISystemClock>();
-        _clock.UtcNow.Returns(FixedNow);
+        _clock = new FakeTimeProvider();
+        _clock.SetUtcNow(FixedNow);
 
         _provider = new ServiceCollection()
             .AddSingleton(_tagging)
             .AddSingleton(_vectorStore)
-            .AddSingleton(_clock)
+            .AddSingleton<TimeProvider>(_clock)
             .AddSingleton<IOptions<EnrichmentClassifyOptions>>(
                 Options.Create(new EnrichmentClassifyOptions()))
             .AddMassTransitTestHarness(x =>

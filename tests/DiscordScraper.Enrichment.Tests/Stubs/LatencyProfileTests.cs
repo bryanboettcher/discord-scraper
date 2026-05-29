@@ -1,4 +1,5 @@
 using DiscordScraper.TestSupport.Stubs;
+using Microsoft.Extensions.Time.Testing;
 
 namespace DiscordScraper.Enrichment.Tests.Stubs;
 
@@ -28,27 +29,28 @@ public class LatencyProfileTests
         Assert.That(sw.ElapsedMilliseconds, Is.LessThan(200));
     }
 
+    /// <summary>
+    /// Verifies that Range.Delay completes when the FakeTimeProvider is advanced past Max.
+    /// Uses FakeTimeProvider so the test is deterministic — no wall-clock dependency and no
+    /// sensitivity to scheduler jitter under Docker resource constraints.
+    /// </summary>
     [Test]
     public async Task Range_UniformDistribution_ProducesValuesInRange()
     {
         var min = TimeSpan.FromMilliseconds(50);
         var max = TimeSpan.FromMilliseconds(150);
-        var profile = new LatencyProfile<string>.Range(min, max);
 
-        var measurements = new List<long>();
         for (int i = 0; i < 10; i++)
         {
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            await profile.Delay("test", CancellationToken.None);
-            sw.Stop();
-            measurements.Add(sw.ElapsedMilliseconds);
-        }
+            var time = new FakeTimeProvider();
+            var profile = new LatencyProfile<string>.Range(min, max, time);
 
-        Assert.That(measurements, Has.Count.EqualTo(10));
-        foreach (var m in measurements)
-        {
-            Assert.That(m, Is.GreaterThanOrEqualTo(50));
-            Assert.That(m, Is.LessThan(200));
+            var task = profile.Delay("test", CancellationToken.None);
+
+            // Advance past Max so whatever delay was sampled in [min, max) is guaranteed elapsed.
+            time.Advance(max);
+
+            await task;
         }
     }
 

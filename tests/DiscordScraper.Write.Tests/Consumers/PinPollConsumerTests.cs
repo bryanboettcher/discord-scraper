@@ -1,5 +1,5 @@
-using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Contracts.Events.Channel;
+using Microsoft.Extensions.Time.Testing;
 using DiscordScraper.Contracts.Events.Message;
 using DiscordScraper.Discord;
 using DiscordScraper.Discord.Models;
@@ -195,12 +195,12 @@ public sealed class PinPollConsumerTests
 
     private static ServiceProvider BuildProvider(IDiscordClient discord)
     {
-        var clock = Substitute.For<ISystemClock>();
-        clock.UtcNow.Returns(FixedNow);
+        var clock = new FakeTimeProvider();
+        clock.SetUtcNow(FixedNow);
 
         return new ServiceCollection()
             .AddSingleton(discord)
-            .AddSingleton(clock)
+            .AddSingleton<TimeProvider>(clock)
             .AddLogging()
             .AddMassTransitTestHarness(cfg =>
             {

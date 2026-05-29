@@ -1,5 +1,5 @@
-using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Contracts.Filters;
+using Microsoft.Extensions.Time.Testing;
 using MassTransit;
 using NSubstitute;
 
@@ -25,10 +25,10 @@ public sealed class OutboundTimestampFilterTests
 {
     private static readonly DateTimeOffset FixedNow = new(2024, 1, 15, 12, 0, 0, TimeSpan.Zero);
 
-    private static ISystemClock MakeClock(DateTimeOffset? now = null)
+    private static FakeTimeProvider MakeClock(DateTimeOffset? now = null)
     {
-        var clock = Substitute.For<ISystemClock>();
-        clock.UtcNow.Returns(now ?? FixedNow);
+        var clock = new FakeTimeProvider();
+        clock.SetUtcNow(now ?? FixedNow);
         return clock;
     }
 

@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Contracts.Events.Message;
 using DiscordScraper.Contracts.Requests;
 using DiscordScraper.Core.Vector;
@@ -22,7 +21,7 @@ namespace DiscordScraper.Enrichment.Consumers;
 public sealed class ClassifyConsumer(
     ITaggingClient tagging,
     IVectorStore vectorStore,
-    ISystemClock clock,
+    TimeProvider clock,
     ILogger<ClassifyConsumer> logger) : IConsumer<ClassifyMessageRequested>
 {
     public async Task Consume(ConsumeContext<ClassifyMessageRequested> context)
@@ -44,7 +43,7 @@ public sealed class ClassifyConsumer(
 
         await vectorStore.UpsertManyAsync([point], context.CancellationToken);
 
-        var indexedAt = clock.UtcNow;
+        var indexedAt = clock.GetUtcNow();
         sw.Stop();
 
         logger.LogInformation(

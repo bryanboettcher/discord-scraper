@@ -1,5 +1,4 @@
 using DiscordScraper.Contracts;
-using DiscordScraper.Contracts.Clock;
 using MassTransit;
 
 namespace DiscordScraper.TestSupport.Observers;
@@ -22,7 +21,7 @@ namespace DiscordScraper.TestSupport.Observers;
 ///    <see cref="Filters.OutboundTimestampFilter{T}"/> at publish time. <c>ReceivedOn</c>
 ///    is also available from the same message when ticks &gt; 0.
 /// 2. <c>context.Message is IStampable { Timestamp.Ticks: &gt; 0 }</c> — stamped at publish
-///    time but no receive-side stamp; fall back to clock.UtcNow for the receive timestamp.
+///    time but no receive-side stamp; fall back to clock.GetUtcNow() for the receive timestamp.
 /// 3. <c>context.SentTime</c> — broker-reported accept time. Non-null on RabbitMQ; null on
 ///    InMemory transport.
 /// 4. <c>DateTimeOffset.MinValue</c> — sentinel when no enqueued-at signal is available
@@ -30,7 +29,7 @@ namespace DiscordScraper.TestSupport.Observers;
 ///    <see cref="ITestObservationSink.QueueDwells"/> so callers can notice rather than miss it.
 ///    Filter by <c>EnqueuedAt != DateTimeOffset.MinValue</c> to exclude these from dwell analysis.
 /// </summary>
-public sealed class QueueDwellObserver(ITestObservationSink sink, ISystemClock clock)
+public sealed class QueueDwellObserver(ITestObservationSink sink, TimeProvider clock)
     : IConsumeObserver
 {
     public Task PreConsume<T>(ConsumeContext<T> context) where T : class
@@ -46,22 +45,22 @@ public sealed class QueueDwellObserver(ITestObservationSink sink, ISystemClock c
         if (context.Message is IMeasured { Timestamp.Ticks: > 0 } measured)
         {
             enqueued = measured.Timestamp;
-            preConsumeAt = measured.ReceivedOn.Ticks > 0 ? measured.ReceivedOn : clock.UtcNow;
+            preConsumeAt = measured.ReceivedOn.Ticks > 0 ? measured.ReceivedOn : clock.GetUtcNow();
         }
         else if (context.Message is IStampable { Timestamp.Ticks: > 0 } stampable)
         {
             enqueued = stampable.Timestamp;
-            preConsumeAt = clock.UtcNow;
+            preConsumeAt = clock.GetUtcNow();
         }
         else if (context.SentTime.HasValue)
         {
             enqueued = new DateTimeOffset(context.SentTime.Value, TimeSpan.Zero);
-            preConsumeAt = clock.UtcNow;
+            preConsumeAt = clock.GetUtcNow();
         }
         else
         {
             enqueued = DateTimeOffset.MinValue;
-            preConsumeAt = clock.UtcNow;
+            preConsumeAt = clock.GetUtcNow();
         }
 
         sink.RecordQueueDwell(messageId, typeof(T), enqueued, preConsumeAt);

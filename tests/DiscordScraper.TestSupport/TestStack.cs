@@ -1,5 +1,4 @@
 using System.Reflection;
-using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Contracts.Configuration;
 using DiscordScraper.Contracts.Filters;
 using DiscordScraper.Contracts.Requests;
@@ -423,9 +422,7 @@ public sealed class TestStack : IAsyncDisposable
         });
 
         // Clock
-        var clock = Substitute.For<ISystemClock>();
-        clock.UtcNow.Returns(_ => DateTimeOffset.UtcNow);
-        services.AddSingleton(clock);
+        services.AddSingleton(TimeProvider.System);
 
         // Stubs
         var embedStub = new StubEmbeddingClient(

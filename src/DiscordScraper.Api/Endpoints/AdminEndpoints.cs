@@ -1,5 +1,4 @@
 using DiscordScraper.Api.Admin;
-using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Contracts.Events.Channel;
 using DiscordScraper.Contracts.Events.Guild;
 using DiscordScraper.Contracts.Events.Message;
@@ -44,7 +43,7 @@ public static class AdminEndpoints
     private static async Task<IResult> HandleStats(
         ISagaIntrospection sagas,
         IReadStoreStatistics readStore,
-        ISystemClock clock,
+        TimeProvider clock,
         CancellationToken ct)
     {
         var sagaTask  = sagas.GetCountsAsync(ct);
@@ -55,12 +54,12 @@ public static class AdminEndpoints
         return Results.Ok(new AdminStatsResponse(
             ReadStore:   await storeTask,
             Sagas:       await sagaTask,
-            GeneratedAt: clock.UtcNow));
+            GeneratedAt: clock.GetUtcNow()));
     }
 
     private static async Task<IResult> HandleSyncStatus(
         ISagaIntrospection sagas,
-        ISystemClock clock,
+        TimeProvider clock,
         CancellationToken ct)
     {
         var counts = await sagas.GetCountsAsync(ct);
@@ -71,7 +70,7 @@ public static class AdminEndpoints
         return Results.Ok(new SyncStatusResponse(
             Counts:               counts,
             RecentlySyncedChannels: (int)recentlySyncing,
-            GeneratedAt:          clock.UtcNow));
+            GeneratedAt:          clock.GetUtcNow()));
     }
 
     private static async Task<IResult> HandleListGuilds(
@@ -94,14 +93,14 @@ public static class AdminEndpoints
     private static async Task<IResult> HandleForceGuildSync(
         long guildId,
         IPublishEndpoint publish,
-        ISystemClock clock,
+        TimeProvider clock,
         CancellationToken ct)
     {
         await publish.Publish<GuildSyncDue>(new
         {
             GuildId      = guildId,
             CurrentState = "Syncing",
-            UpdatedOn = clock.UtcNow,
+            UpdatedOn = clock.GetUtcNow(),
         }, ct);
 
         return Results.Accepted();
@@ -112,7 +111,7 @@ public static class AdminEndpoints
         [FromQuery] long? guildId,
         [FromQuery] long? cursorSnowflake,
         IPublishEndpoint publish,
-        ISystemClock clock,
+        TimeProvider clock,
         CancellationToken ct)
     {
         if (guildId is null)
@@ -124,7 +123,7 @@ public static class AdminEndpoints
             GuildId         = guildId.Value,
             CursorSnowflake = (long?)cursorSnowflake,
             CurrentState    = "Syncing",
-            UpdatedOn   = clock.UtcNow,
+            UpdatedOn   = clock.GetUtcNow(),
         }, ct);
 
         return Results.Accepted();
@@ -142,12 +141,12 @@ public static class AdminEndpoints
     private static async Task<IResult> HandleReplayFaulted(
         [FromQuery] string? phase,
         IPublishEndpoint publish,
-        ISystemClock clock,
+        TimeProvider clock,
         CancellationToken ct)
     {
         await publish.Publish<MessageReplayRequested>(new
         {
-            Timestamp = clock.UtcNow,
+            Timestamp = clock.GetUtcNow(),
             Phase = phase,
         }, ct);
 

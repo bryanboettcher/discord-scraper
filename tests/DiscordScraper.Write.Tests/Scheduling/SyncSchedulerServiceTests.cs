@@ -1,5 +1,5 @@
-using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Contracts.Events.Sync;
+using Microsoft.Extensions.Time.Testing;
 using DiscordScraper.Discord.Options;
 using DiscordScraper.Write.Scheduling;
 using MassTransit;
@@ -18,7 +18,7 @@ public sealed class SyncSchedulerServiceTests
 
     private IPublishEndpoint _publish = null!;
     private IServiceScopeFactory _scopeFactory = null!;
-    private ISystemClock _clock = null!;
+    private FakeTimeProvider _clock = null!;
 
     [SetUp]
     public void SetUp()
@@ -36,8 +36,8 @@ public sealed class SyncSchedulerServiceTests
         _scopeFactory = Substitute.For<IServiceScopeFactory>();
         _scopeFactory.CreateScope().Returns(asyncScope);
 
-        _clock = Substitute.For<ISystemClock>();
-        _clock.UtcNow.Returns(FixedNow);
+        _clock = new FakeTimeProvider();
+        _clock.SetUtcNow(FixedNow);
     }
 
     private SyncSchedulerService BuildService(TimeSpan? interval = null)

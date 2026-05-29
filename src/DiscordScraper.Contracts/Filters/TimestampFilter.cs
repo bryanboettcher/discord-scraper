@@ -1,4 +1,3 @@
-using DiscordScraper.Contracts.Clock;
 using MassTransit;
 
 namespace DiscordScraper.Contracts.Filters;
@@ -30,7 +29,7 @@ namespace DiscordScraper.Contracts.Filters;
 /// before the body's lazy serialization is evaluated, so the stamped value is included in the
 /// wire bytes on all transports.
 /// </summary>
-public sealed class OutboundTimestampFilter<T>(ISystemClock clock)
+public sealed class OutboundTimestampFilter<T>(TimeProvider clock)
     : IFilter<SendContext<T>>, IFilter<PublishContext<T>>
     where T : class
 {
@@ -51,6 +50,6 @@ public sealed class OutboundTimestampFilter<T>(ISystemClock clock)
     private void Stamp(T message)
     {
         if (message is IStampable { Timestamp.Ticks: 0 } stampable)
-            stampable.Timestamp = clock.UtcNow;
+            stampable.Timestamp = clock.GetUtcNow();
     }
 }

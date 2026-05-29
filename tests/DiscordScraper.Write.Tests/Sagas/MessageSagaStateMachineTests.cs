@@ -1,6 +1,6 @@
 using DiscordScraper.Contracts;
-using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Contracts.Events.Message;
+using Microsoft.Extensions.Time.Testing;
 using DiscordScraper.Contracts.Events.Sync;
 using DiscordScraper.Contracts.IR;
 using DiscordScraper.Contracts.Requests;
@@ -32,13 +32,17 @@ public sealed class MessageSagaStateMachineTests
         ReplyTo: null,
         CapturedAt: FixedNow);
 
-    private static ISystemClock MakeClock() =>
-        Substitute.For<ISystemClock>().With(c => c.UtcNow.Returns(FixedNow));
+    private static FakeTimeProvider MakeClock()
+    {
+        var clock = new FakeTimeProvider();
+        clock.SetUtcNow(FixedNow);
+        return clock;
+    }
 
     // Builds an in-memory harness wired through the full happy path:
     // Analyze → Project → Tagging → Classifying → Enriched.
     private static ServiceProvider BuildProvider(
-        ISystemClock clock,
+        FakeTimeProvider clock,
         bool isSubstantive = true,
         bool isBot = false,
         string detectedLanguage = "en",
@@ -46,7 +50,7 @@ public sealed class MessageSagaStateMachineTests
     {
         var ir = projectIR ?? StubIR;
         return new ServiceCollection()
-            .AddSingleton(clock)
+            .AddSingleton<TimeProvider>(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
@@ -92,10 +96,10 @@ public sealed class MessageSagaStateMachineTests
     }
 
     // Provider that stubs Analyze but never responds to ProjectMessage — saga parks in ProjectMessage.Pending.
-    private static ServiceProvider BuildProviderProjectPending(ISystemClock clock)
+    private static ServiceProvider BuildProviderProjectPending(FakeTimeProvider clock)
     {
         return new ServiceCollection()
-            .AddSingleton(clock)
+            .AddSingleton<TimeProvider>(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
@@ -116,10 +120,10 @@ public sealed class MessageSagaStateMachineTests
     }
 
     // Provider that stubs through Project but parks at Tagging (no TagMessageRequested handler).
-    private static ServiceProvider BuildProviderTagPending(ISystemClock clock)
+    private static ServiceProvider BuildProviderTagPending(FakeTimeProvider clock)
     {
         return new ServiceCollection()
-            .AddSingleton(clock)
+            .AddSingleton<TimeProvider>(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
@@ -145,10 +149,10 @@ public sealed class MessageSagaStateMachineTests
     }
 
     // Provider that stubs through Tag but parks at Classifying (no ClassifyMessageRequested handler).
-    private static ServiceProvider BuildProviderClassifyPending(ISystemClock clock)
+    private static ServiceProvider BuildProviderClassifyPending(FakeTimeProvider clock)
     {
         return new ServiceCollection()
-            .AddSingleton(clock)
+            .AddSingleton<TimeProvider>(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
@@ -272,7 +276,7 @@ public sealed class MessageSagaStateMachineTests
     {
         var clock = MakeClock();
         await using var provider = new ServiceCollection()
-            .AddSingleton(clock)
+            .AddSingleton<TimeProvider>(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
@@ -421,7 +425,7 @@ public sealed class MessageSagaStateMachineTests
     {
         var clock = MakeClock();
         await using var provider = new ServiceCollection()
-            .AddSingleton(clock)
+            .AddSingleton<TimeProvider>(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
@@ -557,7 +561,7 @@ public sealed class MessageSagaStateMachineTests
         var requestCount = 0;
 
         await using var provider = new ServiceCollection()
-            .AddSingleton(clock)
+            .AddSingleton<TimeProvider>(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
@@ -646,7 +650,7 @@ public sealed class MessageSagaStateMachineTests
         var projectCount = 0;
 
         await using var provider = new ServiceCollection()
-            .AddSingleton(clock)
+            .AddSingleton<TimeProvider>(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
@@ -743,7 +747,7 @@ public sealed class MessageSagaStateMachineTests
     {
         var clock = MakeClock();
         await using var provider = new ServiceCollection()
-            .AddSingleton(clock)
+            .AddSingleton<TimeProvider>(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
@@ -787,7 +791,7 @@ public sealed class MessageSagaStateMachineTests
     {
         var clock = MakeClock();
         await using var provider = new ServiceCollection()
-            .AddSingleton(clock)
+            .AddSingleton<TimeProvider>(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
@@ -844,7 +848,7 @@ public sealed class MessageSagaStateMachineTests
     {
         var clock = MakeClock();
         await using var provider = new ServiceCollection()
-            .AddSingleton(clock)
+            .AddSingleton<TimeProvider>(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
@@ -970,7 +974,7 @@ public sealed class MessageSagaStateMachineTests
         var projectCount = 0;
 
         await using var provider = new ServiceCollection()
-            .AddSingleton(clock)
+            .AddSingleton<TimeProvider>(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
@@ -1055,7 +1059,7 @@ public sealed class MessageSagaStateMachineTests
         var projectCount = 0;
 
         await using var provider = new ServiceCollection()
-            .AddSingleton(clock)
+            .AddSingleton<TimeProvider>(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
@@ -1174,12 +1178,12 @@ public sealed class MessageSagaStateMachineTests
 
     // Helper: drives a saga all the way to Enriched with the given model versions stamped.
     private static ServiceProvider BuildProviderWithModels(
-        ISystemClock clock,
+        FakeTimeProvider clock,
         string embeddingModel,
         string tagModel)
     {
         return new ServiceCollection()
-            .AddSingleton(clock)
+            .AddSingleton<TimeProvider>(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
@@ -1229,7 +1233,7 @@ public sealed class MessageSagaStateMachineTests
         var classifyCount = 0;
 
         await using var provider = new ServiceCollection()
-            .AddSingleton(clock)
+            .AddSingleton<TimeProvider>(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
@@ -1373,7 +1377,7 @@ public sealed class MessageSagaStateMachineTests
 
         // Provider that parks at AnalyzeMessage.Pending (no handler).
         await using var provider = new ServiceCollection()
-            .AddSingleton(clock)
+            .AddSingleton<TimeProvider>(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
@@ -1421,7 +1425,7 @@ public sealed class MessageSagaStateMachineTests
         var tagCount = 0;
         var classifyCount = 0;
         await using var provider = new ServiceCollection()
-            .AddSingleton(clock)
+            .AddSingleton<TimeProvider>(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
@@ -1532,10 +1536,10 @@ public sealed class MessageSagaStateMachineTests
     // =========================================================================
 
     // Helper: drives a saga to Faulted on the Tag phase (no embedding stored).
-    private static ServiceProvider BuildProviderTagFaulted(ISystemClock clock)
+    private static ServiceProvider BuildProviderTagFaulted(FakeTimeProvider clock)
     {
         return new ServiceCollection()
-            .AddSingleton(clock)
+            .AddSingleton<TimeProvider>(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
@@ -1557,10 +1561,10 @@ public sealed class MessageSagaStateMachineTests
     }
 
     // Helper: drives a saga to Faulted on the Classify phase (embedding stored, tags missing).
-    private static ServiceProvider BuildProviderClassifyFaulted(ISystemClock clock)
+    private static ServiceProvider BuildProviderClassifyFaulted(FakeTimeProvider clock)
     {
         return new ServiceCollection()
-            .AddSingleton(clock)
+            .AddSingleton<TimeProvider>(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
@@ -1600,7 +1604,7 @@ public sealed class MessageSagaStateMachineTests
 
         var tagCount = 0;
         await using var provider = new ServiceCollection()
-            .AddSingleton(clock)
+            .AddSingleton<TimeProvider>(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
@@ -1683,7 +1687,7 @@ public sealed class MessageSagaStateMachineTests
 
         var classifyCount = 0;
         await using var provider = new ServiceCollection()
-            .AddSingleton(clock)
+            .AddSingleton<TimeProvider>(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
@@ -1917,7 +1921,7 @@ public sealed class MessageSagaStateMachineTests
         var classifyCount = 0;
 
         await using var provider = new ServiceCollection()
-            .AddSingleton(clock)
+            .AddSingleton<TimeProvider>(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()
@@ -2012,7 +2016,7 @@ public sealed class MessageSagaStateMachineTests
         var classifyCount = 0;
 
         await using var provider = new ServiceCollection()
-            .AddSingleton(clock)
+            .AddSingleton<TimeProvider>(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<MessageSagaStateMachine, MessageSagaState>()

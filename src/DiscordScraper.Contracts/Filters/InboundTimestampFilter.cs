@@ -1,4 +1,3 @@
-using DiscordScraper.Contracts.Clock;
 using MassTransit;
 
 namespace DiscordScraper.Contracts.Filters;
@@ -20,13 +19,13 @@ namespace DiscordScraper.Contracts.Filters;
 /// filters. This filter stamps <c>ReceivedOn</c> before <c>PostConsume</c>, so observers that
 /// read <c>ReceivedOn</c> must do so in <c>PostConsume</c>.
 /// </summary>
-public sealed class InboundTimestampFilter<T>(ISystemClock clock) : IFilter<ConsumeContext<T>>
+public sealed class InboundTimestampFilter<T>(TimeProvider clock) : IFilter<ConsumeContext<T>>
     where T : class
 {
     public Task Send(ConsumeContext<T> context, IPipe<ConsumeContext<T>> next)
     {
         if (context.Message is IMeasured { ReceivedOn.Ticks: 0 } measured)
-            measured.ReceivedOn = clock.UtcNow;
+            measured.ReceivedOn = clock.GetUtcNow();
         return next.Send(context);
     }
 

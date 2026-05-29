@@ -1,6 +1,6 @@
 using System.Text.Json;
-using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Contracts.Configuration;
+using Microsoft.Extensions.Time.Testing;
 using DiscordScraper.Contracts.Events.Channel;
 using DiscordScraper.Contracts.Events.Guild;
 using DiscordScraper.Contracts.Events.Message;
@@ -162,8 +162,8 @@ public sealed class MessageCaptureConsumerTests
 
     private static ServiceProvider BuildProvider(bool enabled, string outputDir)
     {
-        var clock = Substitute.For<ISystemClock>();
-        clock.UtcNow.Returns(DateTimeOffset.UtcNow);
+        var clock = new FakeTimeProvider();
+        clock.SetUtcNow(DateTimeOffset.UtcNow);
 
         var options = Options.Create(new CaptureOptions
         {
@@ -172,7 +172,7 @@ public sealed class MessageCaptureConsumerTests
         });
 
         return new ServiceCollection()
-            .AddSingleton<ISystemClock>(clock)
+            .AddSingleton<TimeProvider>(clock)
             .AddSingleton<IOptions<CaptureOptions>>(options)
             .AddSingleton<CaptureWriter>()
             .AddLogging()

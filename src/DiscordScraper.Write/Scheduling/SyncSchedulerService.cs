@@ -1,4 +1,3 @@
-using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Contracts.Events.Sync;
 using DiscordScraper.Discord.Options;
 using MassTransit;
@@ -12,7 +11,7 @@ namespace DiscordScraper.Write.Scheduling;
 internal sealed class SyncSchedulerService(
     IServiceScopeFactory scopeFactory,
     IOptions<DiscordOptions> options,
-    ISystemClock clock,
+    TimeProvider clock,
     ILogger<SyncSchedulerService> logger) : BackgroundService
 {
     // Lets the MT bus finish topology setup before the first publish.
@@ -48,7 +47,7 @@ internal sealed class SyncSchedulerService(
             await using var scope = scopeFactory.CreateAsyncScope();
             var publish = scope.ServiceProvider.GetRequiredService<IPublishEndpoint>();
 
-            var now = clock.UtcNow;
+            var now = clock.GetUtcNow();
             var staleAfter = now - options.Value.SyncInterval;
 
             await publish.Publish<SyncHeartbeat>(new

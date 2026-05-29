@@ -1,6 +1,6 @@
 using DiscordScraper.Contracts;
-using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Contracts.Filters;
+using Microsoft.Extensions.Time.Testing;
 using DiscordScraper.TestSupport.Observers;
 using MassTransit;
 using MassTransit.Testing;
@@ -42,14 +42,18 @@ public sealed class ObserverHarnessTests
         public DateTimeOffset ReceivedOn { get; set; }
     }
 
-    private static ISystemClock MakeClock() =>
-        Substitute.For<ISystemClock>().Also(c => c.UtcNow.Returns(_ => DateTimeOffset.UtcNow));
+    private static FakeTimeProvider MakeClock()
+    {
+        var clock = new FakeTimeProvider();
+        clock.SetUtcNow(DateTimeOffset.UtcNow);
+        return clock;
+    }
 
-    private static ServiceProvider BuildProvider(ISystemClock? clock = null)
+    private static ServiceProvider BuildProvider(FakeTimeProvider? clock = null)
     {
         var effectiveClock = clock ?? MakeClock();
         var services = new ServiceCollection();
-        services.AddSingleton(effectiveClock);
+        services.AddSingleton<TimeProvider>(effectiveClock);
 
         services.AddTestObservation()
                 .ForResponseType<PingResponse>();

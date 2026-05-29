@@ -1,5 +1,4 @@
 using DiscordScraper.Contracts;
-using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Contracts.Events.Channel;
 using DiscordScraper.Contracts.Events.Message;
 using DiscordScraper.Discord;
@@ -27,7 +26,7 @@ namespace DiscordScraper.Write.Consumers;
 /// </summary>
 public sealed class PinPollConsumer(
     IDiscordClient discord,
-    ISystemClock clock,
+    TimeProvider clock,
     ILogger<PinPollConsumer> logger) : IConsumer<PinPollDue>
 {
     public async Task Consume(ConsumeContext<PinPollDue> context)
@@ -48,7 +47,7 @@ public sealed class PinPollConsumer(
             .ToList();
 
         var canonical = PinSetCanonicalizer.Canonicalize(snapshots);
-        var observedAt = clock.UtcNow;
+        var observedAt = clock.GetUtcNow();
 
         await context.Publish<PinSetChanged>(new
         {

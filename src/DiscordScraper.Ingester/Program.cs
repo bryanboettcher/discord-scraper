@@ -1,4 +1,3 @@
-using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Contracts.Filters;
 using DiscordScraper.Core.Configuration;
 using DiscordScraper.Discord.Extensions;
@@ -48,8 +47,8 @@ builder.Services.AddOptions<ChannelReadBatchOptions>()
 builder.Services.AddOptions<GuildReadBatchOptions>()
     .BindConfiguration(GuildReadBatchOptions.SectionName);
 
-// ISystemClock is consumed by sagas, scheduler, consumers — register once at the host root.
-builder.Services.AddSingleton<ISystemClock, SystemClock>();
+// TimeProvider is consumed by sagas, scheduler, consumers — register once at the host root.
+builder.Services.AddSingleton(TimeProvider.System);
 
 // --- MongoDB client + database ---
 // MongoClientSettings configures the DiagnosticSources activity propagation

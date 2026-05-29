@@ -40,7 +40,7 @@ public abstract class AdminEndpointsTests
     public void BaseSetUp()
     {
         Factory = new ApiTestFactory();
-        Factory.SystemClock.UtcNow.Returns(FixedNow);
+        Factory.SystemClock.SetUtcNow(FixedNow);
         Client = Factory.CreateClient();
         Arrange();
     }

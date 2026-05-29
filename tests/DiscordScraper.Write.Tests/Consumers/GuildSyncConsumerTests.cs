@@ -1,6 +1,6 @@
 using DiscordScraper.Contracts;
-using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Contracts.Events.Channel;
+using Microsoft.Extensions.Time.Testing;
 using DiscordScraper.Contracts.Events.Guild;
 using DiscordScraper.Discord;
 using DiscordScraper.Discord.Models;
@@ -360,13 +360,13 @@ public sealed class GuildSyncConsumerTests
 
     private static ServiceProvider BuildProvider(IDiscordClient discord, IChannelCursorRepo cursorRepo)
     {
-        var clock = Substitute.For<ISystemClock>();
-        clock.UtcNow.Returns(DateTimeOffset.UtcNow);
+        var clock = new FakeTimeProvider();
+        clock.SetUtcNow(DateTimeOffset.UtcNow);
 
         return new ServiceCollection()
             .AddSingleton(discord)
             .AddSingleton(cursorRepo)
-            .AddSingleton(clock)
+            .AddSingleton<TimeProvider>(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 // Omit GuildSyncConsumerDefinition: it configures UseMongoDbOutbox which

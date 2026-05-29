@@ -1,6 +1,7 @@
 using DiscordScraper.Contracts;
-using DiscordScraper.Contracts.Clock;
+
 using DiscordScraper.Contracts.Events.Channel;
+using Microsoft.Extensions.Time.Testing;
 using DiscordScraper.Contracts.Events.Guild;
 using DiscordScraper.Contracts.Events.Sync;
 using DiscordScraper.Discord;
@@ -315,13 +316,13 @@ public class GuildSagaStateMachineTests
         cursorRepo.GetCursorsAsync(Arg.Any<IReadOnlyCollection<long>>(), Arg.Any<CancellationToken>())
             .Returns(new Dictionary<long, long>());
 
-        var clock = Substitute.For<ISystemClock>();
-        clock.UtcNow.Returns(DateTimeOffset.UtcNow);
+        var clock = new FakeTimeProvider();
+        clock.SetUtcNow(DateTimeOffset.UtcNow);
 
         await using var provider = new ServiceCollection()
             .AddSingleton(discordClient)
             .AddSingleton(cursorRepo)
-            .AddSingleton(clock)
+            .AddSingleton<TimeProvider>(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddConsumer<GuildSyncConsumer>();

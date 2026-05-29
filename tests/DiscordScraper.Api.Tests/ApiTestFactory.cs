@@ -1,6 +1,6 @@
 using DiscordScraper.Api.Admin;
-using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Core.Queries;
+using Microsoft.Extensions.Time.Testing;
 using DiscordScraper.Read.Data;
 using DiscordScraper.Read.Vector;
 using MassTransit;
@@ -39,8 +39,7 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
     public IPublishEndpoint PublishEndpoint { get; } =
         Substitute.For<IPublishEndpoint>();
 
-    public ISystemClock SystemClock { get; } =
-        Substitute.For<ISystemClock>();
+    public FakeTimeProvider SystemClock { get; } = new();
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -78,9 +77,9 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
             services.AddSingleton<IMongoClient>(_ => Substitute.For<IMongoClient>());
             services.AddSingleton<IMongoDatabase>(_ => Substitute.For<IMongoDatabase>());
 
-            // Replace clock with controllable substitute.
-            services.RemoveAll<ISystemClock>();
-            services.AddSingleton(SystemClock);
+            // Replace clock with controllable fake.
+            services.RemoveAll<TimeProvider>();
+            services.AddSingleton<TimeProvider>(SystemClock);
 
             // Replace the real query services with NSubstitute mocks.
             services.RemoveAll<IMessageQueryService>();

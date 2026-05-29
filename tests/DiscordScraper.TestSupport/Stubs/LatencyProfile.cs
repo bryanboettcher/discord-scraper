@@ -23,7 +23,7 @@ public abstract record LatencyProfile<TIn>
     /// <summary>
     /// Latency sampled uniformly from [Min, Max) per call.
     /// </summary>
-    public sealed record Range(TimeSpan Min, TimeSpan Max) : LatencyProfile<TIn>
+    public sealed record Range(TimeSpan Min, TimeSpan Max, TimeProvider? TimeProvider = null) : LatencyProfile<TIn>
     {
         public override async ValueTask Delay(TIn _, CancellationToken ct)
         {
@@ -33,7 +33,7 @@ public abstract record LatencyProfile<TIn>
             var delay = Min.Add(TimeSpan.FromMilliseconds(
                 rng.NextDouble() * (Max - Min).TotalMilliseconds));
             if (delay > TimeSpan.Zero)
-                await Task.Delay(delay, ct);
+                await Task.Delay(delay, TimeProvider ?? System.TimeProvider.System, ct);
         }
     }
 

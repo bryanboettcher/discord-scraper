@@ -1,6 +1,6 @@
 using DiscordScraper.Contracts;
-using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Contracts.Events.Channel;
+using Microsoft.Extensions.Time.Testing;
 using DiscordScraper.Write.Sagas;
 using MassTransit;
 using MassTransit.Testing;
@@ -73,8 +73,8 @@ public sealed class ChannelSagaPinPollTests
             CurrentState = "CaughtUp",
             CanonicalHash = newHash,
             PinCount = 2,
-            ObservedAt = clock.UtcNow,
-            UpdatedOn = clock.UtcNow,
+            ObservedAt = clock.GetUtcNow(),
+            UpdatedOn = clock.GetUtcNow(),
         });
 
         // Wait for PinSetChanged to be consumed by the saga
@@ -111,7 +111,7 @@ public sealed class ChannelSagaPinPollTests
         {
             ChannelId = TestChannelId, GuildId = TestGuildId,
             CurrentState = "CaughtUp", CanonicalHash = stableHash,
-            PinCount = 1, ObservedAt = clock.UtcNow, UpdatedOn = clock.UtcNow,
+            PinCount = 1, ObservedAt = clock.GetUtcNow(), UpdatedOn = clock.GetUtcNow(),
         });
         await Task.Delay(300);
 
@@ -123,7 +123,7 @@ public sealed class ChannelSagaPinPollTests
         {
             ChannelId = TestChannelId, GuildId = TestGuildId,
             CurrentState = "CaughtUp", CanonicalHash = stableHash,
-            PinCount = 1, ObservedAt = clock.UtcNow, UpdatedOn = clock.UtcNow,
+            PinCount = 1, ObservedAt = clock.GetUtcNow(), UpdatedOn = clock.GetUtcNow(),
         });
         await Task.Delay(300);
 
@@ -160,7 +160,7 @@ public sealed class ChannelSagaPinPollTests
         await harness.Bus.Publish<ChannelSyncDue>(new
         {
             ChannelId = TestChannelId, GuildId = TestGuildId,
-            CurrentState = "CaughtUp", UpdatedOn = clock.UtcNow,
+            CurrentState = "CaughtUp", UpdatedOn = clock.GetUtcNow(),
             CursorSnowflake = 100L,
         });
         await sagaHarness.Exists(ExpectedCorrelationId, m => m.Syncing, TimeSpan.FromSeconds(5));
@@ -168,7 +168,7 @@ public sealed class ChannelSagaPinPollTests
         await harness.Bus.Publish<ChannelSyncCompleted>(new
         {
             ChannelId = TestChannelId, GuildId = TestGuildId,
-            CurrentState = "CaughtUp", UpdatedOn = clock.UtcNow,
+            CurrentState = "CaughtUp", UpdatedOn = clock.GetUtcNow(),
             Name = "general", ChannelType = 0, ParentId = (long?)null,
             LastSyncedSnowflake = 200L, MessageCount = 5, IsCaughtUpAtLastPoll = true,
         });
@@ -185,8 +185,12 @@ public sealed class ChannelSagaPinPollTests
     // Helpers
     // ---------------------------------------------------------------------------
 
-    private static ISystemClock MakeClock() =>
-        Substitute.For<ISystemClock>().With(c => c.UtcNow.Returns(DateTimeOffset.UtcNow));
+    private static FakeTimeProvider MakeClock()
+    {
+        var clock = new FakeTimeProvider();
+        clock.SetUtcNow(DateTimeOffset.UtcNow);
+        return clock;
+    }
 
     private static async Task DriveToCaughtUp(ITestHarness harness, long cursor = 0L)
     {
@@ -214,10 +218,10 @@ public sealed class ChannelSagaPinPollTests
         });
     }
 
-    private static ServiceProvider BuildProvider(ISystemClock clock)
+    private static ServiceProvider BuildProvider(FakeTimeProvider clock)
     {
         return new ServiceCollection()
-            .AddSingleton(clock)
+            .AddSingleton<TimeProvider>(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<ChannelSagaStateMachine, ChannelSagaState>()

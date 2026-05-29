@@ -2,7 +2,6 @@ using System.Globalization;
 using System.Net;
 using System.Text.Json;
 using DiscordScraper.Contracts;
-using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Contracts.Events.Channel;
 using DiscordScraper.Contracts.Events.Message;
 using DiscordScraper.Discord;
@@ -23,7 +22,7 @@ namespace DiscordScraper.Write.Consumers;
 /// </remarks>
 public sealed class ChannelSyncConsumer(
     IDiscordClient discord,
-    ISystemClock clock,
+    TimeProvider clock,
     ILogger<ChannelSyncConsumer> logger) : IConsumer<ChannelSyncDue>
 {
     // Discord caps the messages-after response at 100. A short page signals caught-up.
@@ -92,7 +91,7 @@ public sealed class ChannelSyncConsumer(
                 ParentId = (long?)null,
                 IsPresent = false,
                 CurrentState = "Inaccessible",
-                UpdatedOn = clock.UtcNow,
+                UpdatedOn = clock.GetUtcNow(),
             }, ct);
 
             await context.Publish<ChannelSyncCompleted>(new
@@ -100,7 +99,7 @@ public sealed class ChannelSyncConsumer(
                 ChannelId = msg.ChannelId,
                 GuildId = msg.GuildId,
                 CurrentState = "CaughtUp",
-                UpdatedOn = clock.UtcNow,
+                UpdatedOn = clock.GetUtcNow(),
                 Name = string.Empty,
                 ChannelType = 0,
                 ParentId = (long?)null,
@@ -121,7 +120,7 @@ public sealed class ChannelSyncConsumer(
             ChannelId = msg.ChannelId,
             GuildId = msg.GuildId,
             CurrentState = "CaughtUp",
-            UpdatedOn = clock.UtcNow,
+            UpdatedOn = clock.GetUtcNow(),
             Name = string.Empty,
             ChannelType = 0,
             ParentId = (long?)null,

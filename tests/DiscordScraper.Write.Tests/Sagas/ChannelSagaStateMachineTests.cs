@@ -1,6 +1,6 @@
 using DiscordScraper.Contracts;
-using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Contracts.Events.Channel;
+using Microsoft.Extensions.Time.Testing;
 using DiscordScraper.Write.Sagas;
 using MassTransit;
 using MassTransit.Testing;
@@ -24,8 +24,8 @@ public sealed class ChannelSagaStateMachineTests
     [Test]
     public async Task InitFromSyncDue_CreatesSagaInSyncingState()
     {
-        var clock = Substitute.For<ISystemClock>();
-        clock.UtcNow.Returns(DateTimeOffset.UtcNow);
+        var clock = new FakeTimeProvider();
+        clock.SetUtcNow(DateTimeOffset.UtcNow);
 
         await using var provider = BuildProvider(clock);
         var harness = provider.GetTestHarness();
@@ -62,8 +62,8 @@ public sealed class ChannelSagaStateMachineTests
     [Test]
     public async Task SyncCompleted_AdvancesCursorAndTransitionsToCaughtUp()
     {
-        var clock = Substitute.For<ISystemClock>();
-        clock.UtcNow.Returns(DateTimeOffset.UtcNow);
+        var clock = new FakeTimeProvider();
+        clock.SetUtcNow(DateTimeOffset.UtcNow);
 
         await using var provider = BuildProvider(clock);
         var harness = provider.GetTestHarness();
@@ -117,8 +117,8 @@ public sealed class ChannelSagaStateMachineTests
     [Test]
     public async Task SubsequentSyncDue_WhileCaughtUp_ReentersSyncing()
     {
-        var clock = Substitute.For<ISystemClock>();
-        clock.UtcNow.Returns(DateTimeOffset.UtcNow);
+        var clock = new FakeTimeProvider();
+        clock.SetUtcNow(DateTimeOffset.UtcNow);
 
         await using var provider = BuildProvider(clock);
         var harness = provider.GetTestHarness();
@@ -169,8 +169,8 @@ public sealed class ChannelSagaStateMachineTests
     [Test]
     public async Task SyncCompleted_WithLowerSnowflake_DoesNotRegressCursor()
     {
-        var clock = Substitute.For<ISystemClock>();
-        clock.UtcNow.Returns(DateTimeOffset.UtcNow);
+        var clock = new FakeTimeProvider();
+        clock.SetUtcNow(DateTimeOffset.UtcNow);
 
         await using var provider = BuildProvider(clock);
         var harness = provider.GetTestHarness();
@@ -227,8 +227,8 @@ public sealed class ChannelSagaStateMachineTests
     [Test]
     public async Task DuplicateSyncDueWhileSyncing_IsIgnoredNotFaulted()
     {
-        var clock = Substitute.For<ISystemClock>();
-        clock.UtcNow.Returns(DateTimeOffset.UtcNow);
+        var clock = new FakeTimeProvider();
+        clock.SetUtcNow(DateTimeOffset.UtcNow);
 
         await using var provider = BuildProvider(clock);
         var harness = provider.GetTestHarness();
@@ -268,8 +268,8 @@ public sealed class ChannelSagaStateMachineTests
     [Test]
     public async Task PinPollDueWhileSyncing_IsSilentlyDropped_SagaStaysSyncing()
     {
-        var clock = Substitute.For<ISystemClock>();
-        clock.UtcNow.Returns(DateTimeOffset.UtcNow);
+        var clock = new FakeTimeProvider();
+        clock.SetUtcNow(DateTimeOffset.UtcNow);
 
         await using var provider = BuildProvider(clock);
         var harness = provider.GetTestHarness();
@@ -312,8 +312,8 @@ public sealed class ChannelSagaStateMachineTests
     [Test]
     public async Task ChannelChanged_IsPresentFalse_WhileSyncing_SetsSagaIsPresentFalse()
     {
-        var clock = Substitute.For<ISystemClock>();
-        clock.UtcNow.Returns(DateTimeOffset.UtcNow);
+        var clock = new FakeTimeProvider();
+        clock.SetUtcNow(DateTimeOffset.UtcNow);
 
         await using var provider = BuildProvider(clock);
         var harness = provider.GetTestHarness();
@@ -354,8 +354,8 @@ public sealed class ChannelSagaStateMachineTests
     [Test]
     public async Task ChannelChanged_IsPresentFalse_WhileCaughtUp_SetsSagaIsPresentFalse()
     {
-        var clock = Substitute.For<ISystemClock>();
-        clock.UtcNow.Returns(DateTimeOffset.UtcNow);
+        var clock = new FakeTimeProvider();
+        clock.SetUtcNow(DateTimeOffset.UtcNow);
 
         await using var provider = BuildProvider(clock);
         var harness = provider.GetTestHarness();
@@ -406,10 +406,10 @@ public sealed class ChannelSagaStateMachineTests
     // Helpers
     // ---------------------------------------------------------------------------
 
-    private static ServiceProvider BuildProvider(ISystemClock clock)
+    private static ServiceProvider BuildProvider(FakeTimeProvider clock)
     {
         return new ServiceCollection()
-            .AddSingleton(clock)
+            .AddSingleton<TimeProvider>(clock)
             .AddMassTransitTestHarness(cfg =>
             {
                 cfg.AddSagaStateMachine<ChannelSagaStateMachine, ChannelSagaState>()

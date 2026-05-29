@@ -1,6 +1,5 @@
 using DiscordScraper.Api.Admin;
 using DiscordScraper.Api.Endpoints;
-using DiscordScraper.Contracts.Clock;
 using DiscordScraper.Core.Configuration;
 using DiscordScraper.Core.Queries;
 using DiscordScraper.Read.Configuration;
@@ -70,7 +69,7 @@ builder.Services.AddMassTransit(x =>
     });
 });
 
-builder.Services.AddSingleton<ISystemClock, SystemClock>();
+builder.Services.AddSingleton(TimeProvider.System);
 
 builder.Services.AddAdminServices();
 
