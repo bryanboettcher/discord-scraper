@@ -19,6 +19,7 @@ public sealed class TestGuildChanged : GuildChanged
     public bool IsPresent { get; init; } = true;
     public string CurrentState { get; init; } = string.Empty;
     public DateTimeOffset UpdatedOn { get; set; }
+    public DateTimeOffset? SyncedAt { get; init; }
     public Guid CorrelationId => Guid.NewGuid();
 }
 
